@@ -6,6 +6,7 @@
 #include <assert.h> // for assert
 #include <stdio.h> // for printf_s, fopen_s, fwrite
 
+using namespace Core::DirectX;
 
 namespace
 {

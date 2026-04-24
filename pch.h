@@ -8,4 +8,4 @@
 #include <d3d11.h>
 #include <dxgiformat.h>
 
-#include "../CoreLib/DirectX/DxSafeRelease.h" // for SafeRelease
+#include "DirectX/DxSafeRelease.h" // for SafeRelease

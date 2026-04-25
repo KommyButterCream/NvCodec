@@ -7,15 +7,15 @@ Provides H.264 encode/decode functionality built on top of Direct3D 11, CUDA, an
 
 # Dependencies
 - [Core](../Core) as a submodule
-- NVIDIA Video Codec SDK
-- NVIDIA CUDA Toolkit
+- NVIDIA Video Codec SDK (v13.0.37)
+- NVIDIA CUDA Toolkit (v12.8)
 
 # Build Environment
 - C++20
 - MSVC (Visual Studio 2022)
 - Windows 10/11 x64
 - Direct3D 11
-- NVIDIA CUDA Toolkit 12.x
+- NVIDIA CUDA Toolkit 12.8
 
 # Notes
 - This repository uses `Core` as a submodule.

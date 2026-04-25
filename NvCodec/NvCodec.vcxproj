@@ -73,7 +73,11 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <NvCodecRoot Condition="'$(NvCodecRoot)'==''">$(MSBuildThisFileDirectory)..\</NvCodecRoot>
-    <CoreRoot Condition="'$(CoreRoot)'==''">$(NvCodecRoot)Modules\Core\</CoreRoot>
+    <InternalModulesRoot Condition="'$(InternalModulesRoot)'==''">$(NvCodecRoot)Modules\</InternalModulesRoot>
+    <ExternalModulesRoot Condition="'$(ExternalModulesRoot)'==''">$(NvCodecRoot)..\</ExternalModulesRoot>
+    <ModulesRoot Condition="'$(ModulesRoot)'=='' and Exists('$(InternalModulesRoot)Core\Core\Core.vcxproj')">$(InternalModulesRoot)</ModulesRoot>
+    <ModulesRoot Condition="'$(ModulesRoot)'=='' and !Exists('$(InternalModulesRoot)Core\Core\Core.vcxproj') and Exists('$(ExternalModulesRoot)Core\Core\Core.vcxproj')">$(ExternalModulesRoot)</ModulesRoot>
+    <CoreRoot Condition="'$(CoreRoot)'==''">$(ModulesRoot)Core\</CoreRoot>
     <CoreProjectPath Condition="'$(CoreProjectPath)'==''">$(CoreRoot)Core\Core.vcxproj</CoreProjectPath>
     <VideoCodecSdkLibDir Condition="'$(VideoCodecSdkLibDir)'==''">$(NvCodecRoot)Nvidia Video Codec SDK\Library</VideoCodecSdkLibDir>
   </PropertyGroup>

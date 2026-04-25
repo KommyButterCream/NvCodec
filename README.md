@@ -23,11 +23,12 @@ Provides H.264 encode/decode functionality built on top of Direct3D 11, CUDA, an
 - CUDA Toolkit and NVIDIA Video Codec SDK must be installed and available in the build environment.
 
 # Clone
+- Clone submodules:
 ```bash
 git clone --recurse-submodules https://github.com/KommyButterCream/Core.git
 ```
 
-If already cloned without submodules:
+- If already cloned without submodules:
 ```bash
 it submodule update --init --recursive
 ```

@@ -35,6 +35,12 @@
     <ClCompile Include="..\NvDecode\DecodeThread.cpp">
       <Filter>NvDecode</Filter>
     </ClCompile>
+    <ClCompile Include="..\NvDecode\D3D11NvDecoder_Impl.cpp">
+      <Filter>NvDecode</Filter>
+    </ClCompile>
+    <ClCompile Include="..\NvEncode\D3D11NvEncoder_Impl.cpp">
+      <Filter>NvEncode</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\pch.h">
@@ -58,13 +64,15 @@
     <ClInclude Include="..\NvDecode\DecodeThread.h">
       <Filter>NvDecode</Filter>
     </ClInclude>
+    <ClInclude Include="..\NvDecode\ColorSpaceCuda.cuh" />
+    <ClInclude Include="..\NvDecode\D3D11NvDecoder_Impl.h">
+      <Filter>NvDecode</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NvEncode\D3D11NvEncoder_Impl.h">
+      <Filter>NvEncode</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\NvDecode\ColorSpaceCuda.cu">
-      <Filter>NvDecode</Filter>
-    </None>
-    <None Include="..\NvDecode\ColorSpaceCuda.cuh">
-      <Filter>NvDecode</Filter>
-    </None>
+    <CudaCompile Include="..\NvDecode\ColorSpaceCuda.cu" />
   </ItemGroup>
 </Project>

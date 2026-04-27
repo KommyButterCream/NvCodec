@@ -8,8 +8,6 @@
 
 #include "ColorSpaceCuda.cuh"
 
-using namespace Core::DirectX;
-
 inline bool CheckCudaDriverAPICall(
 	CUresult errorCode,
 	const char* func,

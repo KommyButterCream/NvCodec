@@ -71,16 +71,6 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-  <PropertyGroup>
-    <NvCodecRoot Condition="'$(NvCodecRoot)'==''">$(MSBuildThisFileDirectory)..\</NvCodecRoot>
-    <InternalModulesRoot Condition="'$(InternalModulesRoot)'==''">$(NvCodecRoot)Modules\</InternalModulesRoot>
-    <ExternalModulesRoot Condition="'$(ExternalModulesRoot)'==''">$(NvCodecRoot)..\</ExternalModulesRoot>
-    <ModulesRoot Condition="'$(ModulesRoot)'=='' and Exists('$(InternalModulesRoot)Core\Core\Core.vcxproj')">$(InternalModulesRoot)</ModulesRoot>
-    <ModulesRoot Condition="'$(ModulesRoot)'=='' and !Exists('$(InternalModulesRoot)Core\Core\Core.vcxproj') and Exists('$(ExternalModulesRoot)Core\Core\Core.vcxproj')">$(ExternalModulesRoot)</ModulesRoot>
-    <CoreRoot Condition="'$(CoreRoot)'==''">$(ModulesRoot)Core\</CoreRoot>
-    <CoreProjectPath Condition="'$(CoreProjectPath)'==''">$(CoreRoot)Core\Core.vcxproj</CoreProjectPath>
-    <VideoCodecSdkLibDir Condition="'$(VideoCodecSdkLibDir)'==''">$(NvCodecRoot)Nvidia Video Codec SDK\Library</VideoCodecSdkLibDir>
-  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -116,15 +106,15 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;BUILD_D3D11_NVIDIA_CODEC_DLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(NvCodecRoot);$(CoreRoot);$(CudaToolkitIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(CudaToolkitIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(CudaToolkitLibDir);$(VideoCodecSdkLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(CudaToolkitLibDir);$(SolutionDir)Nvidia Video Codec SDK\Library;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>nvcuvid.lib;nvencodeapi.lib;cuda.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -137,15 +127,15 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;BUILD_D3D11_NVIDIA_CODEC_DLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(NvCodecRoot);$(CoreRoot);$(CudaToolkitIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(CudaToolkitIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/utf-8</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(CudaToolkitLibDir);$(VideoCodecSdkLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(CudaToolkitLibDir);$(SolutionDir)Nvidia Video Codec SDK\Library;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>nvcuvid.lib;nvencodeapi.lib;cuda.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -157,7 +147,7 @@
     <ClCompile Include="..\NvEncode\D3D11NvEncoder.cpp" />
     <ClCompile Include="..\NvEncode\D3D11NvEncoder_Impl.cpp" />
     <ClCompile Include="..\NvEncode\D3D11VideoProcessorNV12.cpp" />
-    <ClCompile Include="..\pch.cpp">
+    <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
@@ -171,7 +161,7 @@
     <ClInclude Include="..\NvEncode\D3D11NvEncoder_Impl.h" />
     <ClInclude Include="..\NvEncode\D3D11VideoProcessorNV12.h" />
     <ClInclude Include="..\NvEncode\NvEncPacket.h" />
-    <ClInclude Include="..\pch.h" />
+    <ClInclude Include="pch.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="..\NvDecode\ColorSpaceCuda.cu">
@@ -180,7 +170,7 @@
     <ClInclude Include="..\NvDecode\ColorSpaceCuda.cuh" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="$(CoreProjectPath)">
+    <ProjectReference Include="..\..\Core\Core\Core.vcxproj">
       <Project>{e3bd70c4-fc37-4703-9a54-152fd00bdea2}</Project>
     </ProjectReference>
   </ItemGroup>

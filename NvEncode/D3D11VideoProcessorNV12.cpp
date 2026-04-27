@@ -3,8 +3,6 @@
 
 #include <stdio.h> // for printf_s, fopen_s, fwrite
 
-using namespace Core::DirectX;
-
 D3D11VideoProcessorNV12::D3D11VideoProcessorNV12()
 {
 }

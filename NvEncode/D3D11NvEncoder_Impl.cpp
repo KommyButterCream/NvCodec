@@ -2,11 +2,9 @@
 #include "D3D11NvEncoder_Impl.h"
 #include "D3D11VideoProcessorNV12.h"
 
-#include <new>
+#include <new> // for std::nothrow
 #include <assert.h> // for assert
 #include <stdio.h> // for printf_s, fopen_s, fwrite
-
-using namespace Core::DirectX;
 
 namespace
 {

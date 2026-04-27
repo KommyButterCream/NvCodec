@@ -4,13 +4,7 @@
 // 버퍼가 꽉 차면 oldest stream buffer 부터 drop 한다.
 // 항상 1개의 Packet 만 Decode 중인 상태를 유지한다. (Single Decode Thread 사용을 가정)
 
-#ifdef BUILD_D3D11_NVIDIA_CODEC_DLL
-#define DECODER_BITSTREAM_RINGBUFFER_API __declspec(dllexport)
-#else
-#define DECODER_BITSTREAM_RINGBUFFER_API __declspec(dllimport)
-#endif
-
-class DECODER_BITSTREAM_RINGBUFFER_API BitstreamRingBuffer
+class BitstreamRingBuffer
 {
 public:
 	struct EncodedPacket

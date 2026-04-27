@@ -1,7 +1,7 @@
 ﻿#include "pch.h"
 #include "D3D11NvEncoder.h"
 
-#include <new>
+#include <new> // for std::nothrow
 
 #include "D3D11NvEncoder_Impl.h"
 

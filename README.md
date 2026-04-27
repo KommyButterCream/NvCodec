@@ -16,7 +16,7 @@ Provides H.264 encode/decode functionality built on top of Direct3D 11, CUDA, an
 - Windows 10/11 x64
 - Direct3D 11
 - NVIDIA CUDA Toolkit 12.8
-- 
+
 # Repository Layout
 This project expects `NvCodec` and `Core` to be placed under the same parent directory.
 

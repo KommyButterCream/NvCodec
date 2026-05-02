@@ -4,6 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+#include <d3d11_1.h>
 
 #include <cstdint>
 
@@ -13,8 +14,6 @@
 #define D3D11_NVIDIA_DECODER_API __declspec(dllimport)
 #endif
 
-struct ID3D11Texture2D;
-struct ID3D11Device;
 class D3D11NvDecoder_Impl;
 
 class D3D11_NVIDIA_DECODER_API D3D11NvDecoder

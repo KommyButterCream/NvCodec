@@ -149,10 +149,10 @@ D3D11NvDecoder_Impl::D3D11NvDecoder_Impl()
 
 D3D11NvDecoder_Impl::~D3D11NvDecoder_Impl()
 {
-	ShutDown();
+	Destroy();
 }
 
-bool D3D11NvDecoder_Impl::Initialize(ID3D11Device* device)
+bool D3D11NvDecoder_Impl::Initialize(ID3D11Device* device, bool sharedOutputTextureMode)
 {
 	// 디코더를 사용하기 위한 초기화 수행
 
@@ -166,6 +166,7 @@ bool D3D11NvDecoder_Impl::Initialize(ID3D11Device* device)
 	m_D3D11Device = device;
 	m_D3D11Device->AddRef();
 	m_D3D11Device->GetImmediateContext(&m_D3D11Context);
+	m_sharedOutputTextureMode = sharedOutputTextureMode;
 
 	// 디코더 생성을 위한 Cuda Driver 초기화
 	// Cuda Context 생성/획득
@@ -173,14 +174,14 @@ bool D3D11NvDecoder_Impl::Initialize(ID3D11Device* device)
 	// NVDEC 사용을 위한 ctxLock, Stream, Event, Parser 리소스 생성
 	if (!InitializeCuda())
 	{
-		ShutDown();
+		Destroy();
 		return false;
 	}
 
 	return true;
 }
 
-void D3D11NvDecoder_Impl::ShutDown()
+void D3D11NvDecoder_Impl::Destroy()
 {
 	// NVDEC Parser 및 CUDA Resource, D3D11 Resource 해제
 	if (m_parser)
@@ -724,7 +725,7 @@ bool D3D11NvDecoder_Impl::InitializeCuda()
 		CUVIDPARSERPARAMS parserParameters = {};
 		parserParameters.CodecType = cudaVideoCodec_H264;
 		parserParameters.ulMaxNumDecodeSurfaces = 20;
-		parserParameters.ulMaxDisplayDelay = 1;
+		parserParameters.ulMaxDisplayDelay = 0;
 		parserParameters.pUserData = this;
 		parserParameters.pfnSequenceCallback = HandleVideoSequence;
 		parserParameters.pfnDecodePicture = HandlePictureDecode;
@@ -742,7 +743,7 @@ bool D3D11NvDecoder_Impl::InitializeCuda()
 
 	if (!success)
 	{
-		ShutDown();
+		Destroy();
 	}
 
 	return success;
@@ -903,6 +904,7 @@ bool D3D11NvDecoder_Impl::CreateTexturePool()
 		desc.SampleDesc.Count = 1;
 		desc.Usage = D3D11_USAGE_DEFAULT;
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		desc.MiscFlags = m_sharedOutputTextureMode ? D3D11_RESOURCE_MISC_SHARED : 0;
 
 		// 텍스쳐 생성
 		HRESULT hr = m_D3D11Device->CreateTexture2D(&desc, nullptr, &m_textures[i]);
@@ -910,6 +912,25 @@ bool D3D11NvDecoder_Impl::CreateTexturePool()
 		{
 			DestroyTexturePool();
 			return false;
+		}
+
+		if (m_sharedOutputTextureMode)
+		{
+			IDXGIResource* dxgiResource = nullptr;
+			hr = m_textures[i]->QueryInterface(__uuidof(IDXGIResource), reinterpret_cast<void**>(&dxgiResource));
+			if (FAILED(hr) || !dxgiResource)
+			{
+				DestroyTexturePool();
+				return false;
+			}
+
+			hr = dxgiResource->GetSharedHandle(&m_frames[i].sharedHandle);
+			dxgiResource->Release();
+			if (FAILED(hr) || !m_frames[i].sharedHandle)
+			{
+				DestroyTexturePool();
+				return false;
+			}
 		}
 
 		// Cuda 가 Access 할 수 있는 D3D11 Resource 로 등록 
@@ -948,6 +969,7 @@ void D3D11NvDecoder_Impl::DestroyTexturePool()
 		}
 
 		m_frames[i].texture = nullptr;
+		m_frames[i].sharedHandle = nullptr;
 		m_frames[i].timestamp = 0;
 	}
 }

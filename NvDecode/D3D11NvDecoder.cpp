@@ -16,16 +16,16 @@ D3D11NvDecoder::~D3D11NvDecoder()
 	m_impl = nullptr;
 }
 
-bool D3D11NvDecoder::Initialize(ID3D11Device* device)
+bool D3D11NvDecoder::Initialize(ID3D11Device* device, bool sharedOutputTextureMode)
 {
-	return m_impl && m_impl->Initialize(device);
+	return m_impl && m_impl->Initialize(device, sharedOutputTextureMode);
 }
 
-void D3D11NvDecoder::ShutDown()
+void D3D11NvDecoder::Destroy()
 {
 	if (m_impl)
 	{
-		m_impl->ShutDown();
+		m_impl->Destroy();
 	}
 }
 
@@ -48,6 +48,7 @@ D3D11NvDecoder::Frame* D3D11NvDecoder::GetFrame()
 	}
 
 	m_publicFrame.texture = frame->texture;
+	m_publicFrame.sharedHandle = frame->sharedHandle;
 	m_publicFrame.timestamp = frame->timestamp;
 	return &m_publicFrame;
 }

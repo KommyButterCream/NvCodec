@@ -1,5 +1,10 @@
 ﻿#pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+
 #include "../Nvidia Video Codec SDK/include/NvDecoder/nvcuvid.h"
 #include "../Nvidia Video Codec SDK/include/NvDecoder/cuviddec.h"
 
@@ -39,14 +44,15 @@ public:
 	struct Frame
 	{
 		ID3D11Texture2D* texture = nullptr;
+		HANDLE sharedHandle = nullptr;
 		uint64_t timestamp = 0;
 	};
 
 	D3D11NvDecoder_Impl();
 	~D3D11NvDecoder_Impl();
 
-	bool Initialize(ID3D11Device* device);
-	void ShutDown();
+	bool Initialize(ID3D11Device* device, bool sharedOutputTextureMode = false);
+	void Destroy();
 
 	bool Parse(const uint8_t* data, uint32_t size, bool endOfPicture = true, bool endOfStream = false, bool discontinuity = false);
 	Frame* GetFrame();
@@ -100,6 +106,7 @@ private:
 
 	uint32_t m_cacheTextureWidth = 0;
 	uint32_t m_cacheTextureHeight = 0;
+	bool m_sharedOutputTextureMode = false;
 	Frame m_frames[TEXTURE_POOL_COUNT] = {};
 
 	alignas(64) LONG m_writeIndex = 0;

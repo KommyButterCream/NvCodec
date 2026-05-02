@@ -318,9 +318,12 @@ D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::GetFrame()
 		}
 	}
 
-	if (!SaveFrameToBmp(index, L"../Decode.bmp"))
+	if (false)
 	{
-		return nullptr;
+		if (!SaveFrameToBmp(index, L"../Decode.bmp"))
+		{
+			return nullptr;
+		}
 	}
 
 	::InterlockedIncrement(&m_readIndex);

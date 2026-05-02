@@ -570,7 +570,10 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 		uint8_t* yPlane = reinterpret_cast<uint8_t*>(srcFrame);
 		uint8_t* uvPlane = yPlane + srcPitch * m_videoFormatDesc.lumaHeight;
 
-		SaveNV12ToRawFile(srcFrame, srcPitch, L"../DecodeResult.yuv");
+		if (false)
+		{
+			SaveNV12ToRawFile(srcFrame, srcPitch, L"../DecodeResult.yuv");
+		}
 
 		ConvertNV12ToBGRA(
 			yPlane,

@@ -1178,6 +1178,9 @@ bool D3D11NvEncoder_Impl::GetEncodedPacket(uint32_t index, NvEncPacket& packet)
 
 	packet.data = frame.streamData;
 	packet.size = frame.streamDataSize;
+	packet.timestamp = frame.timeStamp;
+	packet.frameType = static_cast<uint16_t>(frame.pictureType);
+	packet.isKeyFrame = frame.isKeyFrame;
 
 	// Bitstream Buffer Unlock
 	return NVENC_API_CALL(m_nvenc.nvEncUnlockBitstream(m_encoderHandle, lockBitstreamData.outputBitstream));

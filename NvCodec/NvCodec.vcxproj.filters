@@ -32,6 +32,9 @@
     <ClCompile Include="..\NvDecode\DecodeThread.cpp">
       <Filter>NvDecode</Filter>
     </ClCompile>
+    <ClCompile Include="..\NvDecode\DecodeThread_Impl.cpp">
+      <Filter>NvDecode</Filter>
+    </ClCompile>
     <ClCompile Include="..\NvDecode\D3D11NvDecoder_Impl.cpp">
       <Filter>NvDecode</Filter>
     </ClCompile>
@@ -59,6 +62,9 @@
       <Filter>NvDecode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvDecode\DecodeThread.h">
+      <Filter>NvDecode</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NvDecode\DecodeThread_Impl.h">
       <Filter>NvDecode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvDecode\D3D11NvDecoder_Impl.h">

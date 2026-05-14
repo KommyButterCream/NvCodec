@@ -144,6 +144,7 @@
     <ClCompile Include="..\NvDecode\BitstreamRingBuffer.cpp" />
     <ClCompile Include="..\NvDecode\D3D11NvDecoder_Impl.cpp" />
     <ClCompile Include="..\NvDecode\DecodeThread.cpp" />
+    <ClCompile Include="..\NvDecode\DecodeThread_Impl.cpp" />
     <ClCompile Include="..\NvEncode\D3D11NvEncoder.cpp" />
     <ClCompile Include="..\NvEncode\D3D11NvEncoder_Impl.cpp" />
     <ClCompile Include="..\NvEncode\D3D11VideoProcessorNV12.cpp" />
@@ -157,6 +158,7 @@
     <ClInclude Include="..\NvDecode\D3D11NvDecoder.h" />
     <ClInclude Include="..\NvDecode\D3D11NvDecoder_Impl.h" />
     <ClInclude Include="..\NvDecode\DecodeThread.h" />
+    <ClInclude Include="..\NvDecode\DecodeThread_Impl.h" />
     <ClInclude Include="..\NvEncode\D3D11NvEncoder.h" />
     <ClInclude Include="..\NvEncode\D3D11NvEncoder_Impl.h" />
     <ClInclude Include="..\NvEncode\D3D11VideoProcessorNV12.h" />

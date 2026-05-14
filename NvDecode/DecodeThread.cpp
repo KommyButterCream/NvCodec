@@ -1,73 +1,43 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "DecodeThread.h"
 
-#include "BitstreamRingBuffer.h"
-#include "D3D11NvDecoder.h"
+#include <new> // for std::nothrow
+
+#include "DecodeThread_Impl.h"
 
 DecodeThread::DecodeThread()
-	: Core::Concurrency::ThreadBase(L"DecodeThread")
+	: m_impl(new (std::nothrow) DecodeThread_Impl())
 {
 }
 
 DecodeThread::~DecodeThread()
 {
 	Shutdown();
+
+	if (m_impl)
+	{
+		delete m_impl;
+		m_impl = nullptr;
+	}
 }
 
 bool DecodeThread::Initialize(BitstreamRingBuffer* buffer, D3D11NvDecoder* decoder)
 {
-	if (!buffer || !decoder)
-		return false;
-
-	Shutdown();
-
-	m_bitstreamBuffer = buffer;
-	m_decoder = decoder;
-
-	if (!Start())
-	{
-		m_bitstreamBuffer = nullptr;
-		m_decoder = nullptr;
-		return false;
-	}
-
-	return true;
+	return m_impl && m_impl->Initialize(buffer, decoder);
 }
 
 void DecodeThread::Shutdown()
 {
-	if (m_bitstreamBuffer)
+	if (m_impl)
 	{
-		m_bitstreamBuffer->Shutdown();
+		m_impl->Shutdown();
 	}
-
-	Stop();
-
-	m_bitstreamBuffer = nullptr;
-	m_decoder = nullptr;
 }
 
-void DecodeThread::Run()
+void DecodeThread::SetFrameCallback(FrameCallback callback, void* userData)
 {
-	while (!IsStopRequested())
+	if (m_impl)
 	{
-		// Decode 를 수행 하기 위한 EncodedPacket 을 하나 가져온다.
-		BitstreamRingBuffer::EncodedPacket* packet = m_bitstreamBuffer->AcquireReadPacket();
-		if (!packet)
-		{
-			break;
-		}
-
-		if (packet->size > 0)
-		{
-			// Decoder 에 Decode 요청
-			m_decoder->Parse(packet->data, static_cast<uint32_t>(packet->size));
-
-			m_decoder->GetFrame();
-		}
-
-		// Decoding 이 완료된 후에 EncodedPacket Slot 을 Release 해준다.
-		// 중복 또는 Multi-Decoding 방지.
-		m_bitstreamBuffer->ReleaseReadPacket();
+		m_impl->SetFrameCallback(callback, userData);
 	}
 }

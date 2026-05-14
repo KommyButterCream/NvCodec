@@ -1,23 +1,22 @@
-﻿#pragma once
+#pragma once
 
-#include "../../Core/Concurrency/ThreadBase.h"
+#include "D3D11NvDecoder.h"
 
 class BitstreamRingBuffer;
-class D3D11NvDecoder;
+class DecodeThread_Impl;
 
-class DecodeThread : public Core::Concurrency::ThreadBase
+class D3D11_NVIDIA_DECODER_API DecodeThread
 {
 public:
+	using FrameCallback = void (*)(const D3D11NvDecoder::Frame& frame, void* userData);
+
 	DecodeThread();
 	~DecodeThread();
 
 	bool Initialize(BitstreamRingBuffer* buffer, D3D11NvDecoder* decoder);
 	void Shutdown();
+	void SetFrameCallback(FrameCallback callback, void* userData);
 
 private:
-	void Run() override;
-
-private:
-	BitstreamRingBuffer* m_bitstreamBuffer = nullptr;
-	D3D11NvDecoder* m_decoder = nullptr;
+	DecodeThread_Impl* m_impl = nullptr;
 };

@@ -34,6 +34,14 @@ bool D3D11NvEncoder::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
 	return m_impl && m_impl->PrepareFrameForEncode(bgraTexture);
 }
 
+void D3D11NvEncoder::RequestKeyFrame()
+{
+	if (m_impl)
+	{
+		m_impl->RequestKeyFrame();
+	}
+}
+
 bool D3D11NvEncoder::DoEncode(NvEncPacket& encodeResultPacket)
 {
 	return m_impl && m_impl->DoEncode(encodeResultPacket);

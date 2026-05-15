@@ -341,6 +341,11 @@ bool D3D11NvEncoder_Impl::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
 	return true;
 }
 
+void D3D11NvEncoder_Impl::RequestKeyFrame()
+{
+	::InterlockedExchange(&m_forceKeyFrame, TRUE);
+}
+
 bool D3D11NvEncoder_Impl::DoEncode(NvEncPacket& encodeResultPacket)
 {
 	// 실제 Encoding 처리 시퀀스
@@ -1092,16 +1097,30 @@ bool D3D11NvEncoder_Impl::EncodeFrame(uint32_t index, bool& needsMoreInput)
 	picParams.frameIdx = m_inputFrameIndex;
 	picParams.outputBitstream = outputBuffer;
 	picParams.completionEvent = GetCompletionEvent(index);
-	//picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR;
+	const bool forceKeyFrame = (::InterlockedExchange(&m_forceKeyFrame, FALSE) == TRUE);
+	if (forceKeyFrame)
+	{
+		picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+	}
 
 	NVENCSTATUS nvStatus = m_nvenc.nvEncEncodePicture(m_encoderHandle, &picParams);
 	if (nvStatus == NV_ENC_ERR_NEED_MORE_INPUT)
 	{
+		if (forceKeyFrame)
+		{
+			::InterlockedExchange(&m_forceKeyFrame, TRUE);
+		}
 		needsMoreInput = true;
 		return true;
 	}
 
-	return NVENC_API_CALL(nvStatus);
+	const bool encodeSucceeded = NVENC_API_CALL(nvStatus);
+	if (!encodeSucceeded && forceKeyFrame)
+	{
+		::InterlockedExchange(&m_forceKeyFrame, TRUE);
+	}
+
+	return encodeSucceeded;
 }
 
 bool D3D11NvEncoder_Impl::WaitForCompletionEvent(uint32_t index)

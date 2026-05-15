@@ -1,5 +1,10 @@
 ﻿#pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+
 #include <dxgiformat.h>
 
 #include "../Nvidia Video Codec SDK/Interface/nvEncodeAPI.h"
@@ -44,6 +49,7 @@ public:
 	void Destroy();
 
 	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
+	void RequestKeyFrame();
 	bool DoEncode(NvEncPacket& encodeResultPacket);
 
 private:
@@ -133,6 +139,7 @@ private:
 	uint64_t m_timeStamp = 0;
 	uint32_t m_inputFrameIndex = 0;
 	uint32_t m_outputFrameIndex = 0;
+	volatile LONG m_forceKeyFrame = FALSE;
 
 	uint32_t m_width = 0;
 	uint32_t m_height = 0;

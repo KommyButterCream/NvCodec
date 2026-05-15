@@ -25,6 +25,7 @@ public:
 	void Destroy();
 
 	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
+	void RequestKeyFrame();
 	bool DoEncode(NvEncPacket& encodeResultPacket);
 
 private:

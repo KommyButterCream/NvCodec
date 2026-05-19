@@ -23,7 +23,7 @@
     <ClCompile Include="..\NvEncode\D3D11VideoProcessorNV12.cpp">
       <Filter>NvEncode</Filter>
     </ClCompile>
-    <ClCompile Include="..\NvDecode\BitstreamRingBuffer.cpp">
+    <ClCompile Include="..\NvDecode\DecodeFrameQueue.cpp">
       <Filter>NvDecode</Filter>
     </ClCompile>
     <ClCompile Include="..\NvDecode\D3D11NvDecoder.cpp">
@@ -41,6 +41,15 @@
     <ClCompile Include="..\NvEncode\D3D11NvEncoder_Impl.cpp">
       <Filter>NvEncode</Filter>
     </ClCompile>
+    <ClCompile Include="..\NvEncode\EncodeFrameQueue.cpp">
+      <Filter>NvEncode</Filter>
+    </ClCompile>
+    <ClCompile Include="..\NvEncode\EncodeThread.cpp">
+      <Filter>NvEncode</Filter>
+    </ClCompile>
+    <ClCompile Include="..\NvEncode\EncodeThread_Impl.cpp">
+      <Filter>NvEncode</Filter>
+    </ClCompile>
     <ClCompile Include="pch.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
@@ -55,7 +64,7 @@
     <ClInclude Include="..\NvEncode\NvEncPacket.h">
       <Filter>NvEncode</Filter>
     </ClInclude>
-    <ClInclude Include="..\NvDecode\BitstreamRingBuffer.h">
+    <ClInclude Include="..\NvDecode\DecodeFrameQueue.h">
       <Filter>NvDecode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvDecode\D3D11NvDecoder.h">
@@ -71,6 +80,15 @@
       <Filter>NvDecode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvEncode\D3D11NvEncoder_Impl.h">
+      <Filter>NvEncode</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NvEncode\EncodeFrameQueue.h">
+      <Filter>NvEncode</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NvEncode\EncodeThread.h">
+      <Filter>NvEncode</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NvEncode\EncodeThread_Impl.h">
       <Filter>NvEncode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvDecode\ColorSpaceCuda.cuh">

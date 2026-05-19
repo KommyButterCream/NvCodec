@@ -21,9 +21,9 @@ DecodeThread::~DecodeThread()
 	}
 }
 
-bool DecodeThread::Initialize(BitstreamRingBuffer* buffer, D3D11NvDecoder* decoder)
+bool DecodeThread::Initialize(DecodeFrameQueue* queue, D3D11NvDecoder* decoder)
 {
-	return m_impl && m_impl->Initialize(buffer, decoder);
+	return m_impl && m_impl->Initialize(queue, decoder);
 }
 
 void DecodeThread::Shutdown()

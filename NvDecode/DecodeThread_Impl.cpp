@@ -1,7 +1,7 @@
 #include "pch.h"
 #include "DecodeThread_Impl.h"
 
-#include "BitstreamRingBuffer.h"
+#include "DecodeFrameQueue.h"
 
 DecodeThread_Impl::DecodeThread_Impl()
 	: Core::Concurrency::ThreadBase(L"DecodeThread")
@@ -13,19 +13,21 @@ DecodeThread_Impl::~DecodeThread_Impl()
 	Shutdown();
 }
 
-bool DecodeThread_Impl::Initialize(BitstreamRingBuffer* buffer, D3D11NvDecoder* decoder)
+bool DecodeThread_Impl::Initialize(DecodeFrameQueue* queue, D3D11NvDecoder* decoder)
 {
-	if (!buffer || !decoder)
+	if (!queue || !decoder)
 		return false;
 
 	Shutdown();
 
-	m_bitstreamBuffer = buffer;
+	// ¿ÜºÎ·ÎºÎÅÍ DecodeFrameQueue ¿Í NvDecoder ÀÔ·Â ¹× ¼³Á¤
+	m_decodeFrameQueue = queue;
 	m_decoder = decoder;
 
+	// µðÄÚµå ½º·¹µå ½ÃÀÛ
 	if (!Start())
 	{
-		m_bitstreamBuffer = nullptr;
+		m_decodeFrameQueue = nullptr;
 		m_decoder = nullptr;
 		return false;
 	}
@@ -35,41 +37,47 @@ bool DecodeThread_Impl::Initialize(BitstreamRingBuffer* buffer, D3D11NvDecoder* 
 
 void DecodeThread_Impl::Shutdown()
 {
-	if (m_bitstreamBuffer)
+	// µðÄÚµù ÇÁ·¹ÀÓ Å¥ ºÎÅÍ Á¾·á ¾Ë¸²
+	if (m_decodeFrameQueue)
 	{
-		m_bitstreamBuffer->Shutdown();
+		m_decodeFrameQueue->Shutdown();
 	}
 
+	// ½º·¹µå Á¾·á
 	Stop();
 
-	m_bitstreamBuffer = nullptr;
+	m_decodeFrameQueue = nullptr;
 	m_decoder = nullptr;
 }
 
 void DecodeThread_Impl::SetFrameCallback(FrameCallback callback, void* userData)
 {
+	// µðÄÚµùÀÌ ³¡³­ ÈÄ È£ÃâµÉ ÄÝ¹é ÇÔ¼ö ¼³Á¤
 	m_frameCallback = callback;
 	m_frameCallbackUserData = userData;
 }
 
 void DecodeThread_Impl::Run()
 {
+	// ½º·¹µå
 	while (!IsStopRequested())
 	{
-		// Decode ë¥¼ ìˆ˜í–‰ í•˜ê¸° ìœ„í•œ EncodedPacket ì„ í•˜ë‚˜ ê°€ì ¸ì˜¨ë‹¤.
-		BitstreamRingBuffer::EncodedPacket* packet = m_bitstreamBuffer->AcquireReadPacket();
-		if (!packet)
+		// µðÄÚµù ÇÁ·¹ÀÓ ¾ÆÀÌÅÛ ÇÏ³ª È¹µæ
+		DecodeFrameQueue::DecodeFrameItem* frameItem = m_decodeFrameQueue->AcquireReadFrame();
+		if (!frameItem)
 		{
 			break;
 		}
 
-		if (packet->size > 0)
+		if (frameItem->size > 0)
 		{
-			// Decoder ì— Decode ìš”ì²­
-			if (m_decoder->Parse(packet->data, static_cast<uint32_t>(packet->size)))
+			// µðÄÚµù ¿äÃ»
+			if (m_decoder->Parse(frameItem->data, static_cast<uint32_t>(frameItem->size)))
 			{
+				// µðÄÚµù °á°ú ÇÁ·¹ÀÓ µ¿±âÈ­ ÈÄ È¹µæ
 				while (D3D11NvDecoder::Frame* frame = m_decoder->GetFrame())
 				{
+					// ÄÝ¹é È£Ãâ
 					if (m_frameCallback)
 					{
 						m_frameCallback(*frame, m_frameCallbackUserData);
@@ -78,8 +86,7 @@ void DecodeThread_Impl::Run()
 			}
 		}
 
-		// Decoding ì´ ì™„ë£Œëœ í›„ì— EncodedPacket Slot ì„ Release í•´ì¤€ë‹¤.
-		// ì¤‘ë³µ ë˜ëŠ” Multi-Decoding ë°©ì§€.
-		m_bitstreamBuffer->ReleaseReadPacket();
+		// µðÄÚµù ÇÁ·¹ÀÓ ¾ÆÀÌÅÛ ¹ÝÈ¯
+		m_decodeFrameQueue->ReleaseReadFrame();
 	}
 }

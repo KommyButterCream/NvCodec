@@ -13,6 +13,7 @@
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct ID3D11Texture2D;
+class ID3D11ImmediateContextGate;
 class D3D11VideoProcessorNV12;
 
 struct NvEncInputFrame
@@ -45,7 +46,12 @@ public:
 	D3D11NvEncoder_Impl(const D3D11NvEncoder_Impl&) = delete;
 	D3D11NvEncoder_Impl& operator=(const D3D11NvEncoder_Impl&) = delete;
 
-	bool Initialize(ID3D11Device* device, uint32_t width, uint32_t height, uint32_t encodeBufferCount);
+	bool Initialize(
+		ID3D11Device* device,
+		uint32_t width,
+		uint32_t height,
+		uint32_t encodeBufferCount,
+		ID3D11ImmediateContextGate* contextGate);
 	void Destroy();
 
 	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
@@ -115,6 +121,7 @@ private:
 private:
 	ID3D11Device* m_D3D11Device = nullptr;
 	ID3D11DeviceContext* m_D3D11Context = nullptr;
+	ID3D11ImmediateContextGate* m_contextGate = nullptr;
 
 	void* m_encoderHandle = nullptr;
 	NV_ENCODE_API_FUNCTION_LIST m_nvenc = {};

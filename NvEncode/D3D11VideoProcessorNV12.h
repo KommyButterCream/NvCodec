@@ -9,6 +9,7 @@ struct ID3D11VideoProcessorEnumerator;
 struct ID3D11VideoProcessor;
 struct ID3D11VideoProcessorInputView;
 struct ID3D11VideoProcessorOutputView;
+class ID3D11ImmediateContextGate;
 
 class D3D11VideoProcessorNV12
 {
@@ -20,7 +21,8 @@ public:
 		ID3D11Device* device,
 		ID3D11DeviceContext* context,
 		int32_t width,
-		int32_t height);
+		int32_t height,
+		ID3D11ImmediateContextGate* contextGate);
 
 	bool SetInputTextures(
 		ID3D11Texture2D** textures,
@@ -47,6 +49,7 @@ private:
 private:
 	ID3D11Device* m_D3D11Device = nullptr;
 	ID3D11DeviceContext* m_D3D11Context = nullptr;
+	ID3D11ImmediateContextGate* m_contextGate = nullptr;
 
 	ID3D11VideoDevice* m_videoDevice = nullptr;
 	ID3D11VideoContext* m_videoContext = nullptr;

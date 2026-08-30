@@ -1,5 +1,6 @@
 ﻿#include "pch.h"
 #include "D3D11NvEncoder_Impl.h"
+#include "../../D3D11EngineInterface/ID3D11ImmediateContextGate.h"
 #include "D3D11VideoProcessorNV12.h"
 
 #include <new> // for std::nothrow
@@ -218,7 +219,12 @@ D3D11NvEncoder_Impl::~D3D11NvEncoder_Impl()
 	Destroy();
 }
 
-bool D3D11NvEncoder_Impl::Initialize(ID3D11Device* device, uint32_t width, uint32_t height, uint32_t encodeBufferCount)
+bool D3D11NvEncoder_Impl::Initialize(
+	ID3D11Device* device,
+	uint32_t width,
+	uint32_t height,
+	uint32_t encodeBufferCount,
+	ID3D11ImmediateContextGate* contextGate)
 {
 	if (!device)
 	{
@@ -230,6 +236,7 @@ bool D3D11NvEncoder_Impl::Initialize(ID3D11Device* device, uint32_t width, uint3
 	m_D3D11Device = device;
 	m_D3D11Device->AddRef();
 	m_D3D11Device->GetImmediateContext(&m_D3D11Context);
+	m_contextGate = contextGate;
 
 	m_width = width;
 	m_height = height;
@@ -314,6 +321,7 @@ void D3D11NvEncoder_Impl::Destroy()
 
 	SafeRelease(m_D3D11Context);
 	SafeRelease(m_D3D11Device);
+	m_contextGate = nullptr;
 }
 
 bool D3D11NvEncoder_Impl::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
@@ -336,7 +344,10 @@ bool D3D11NvEncoder_Impl::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
 	ID3D11Texture2D* dstTexture = m_bgraTextures[inputFrameIndex];
 
 	// GPU -> GPU copy
-	m_D3D11Context->CopyResource(dstTexture, bgraTexture);
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		m_D3D11Context->CopyResource(dstTexture, bgraTexture);
+	}
 
 	return true;
 }
@@ -916,7 +927,12 @@ bool D3D11NvEncoder_Impl::InitializeBGRAtoNV12Converter()
 	if (!m_converter)
 		return false;
 
-	bool result = m_converter->Initialize(m_D3D11Device, m_D3D11Context, m_width, m_height);
+	bool result = m_converter->Initialize(
+		m_D3D11Device,
+		m_D3D11Context,
+		m_width,
+		m_height,
+		m_contextGate);
 	if (!result)
 	{
 		delete m_converter;
@@ -1103,7 +1119,13 @@ bool D3D11NvEncoder_Impl::EncodeFrame(uint32_t index, bool& needsMoreInput)
 		picParams.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
 	}
 
-	NVENCSTATUS nvStatus = m_nvenc.nvEncEncodePicture(m_encoderHandle, &picParams);
+	NVENCSTATUS nvStatus = NV_ENC_ERR_GENERIC;
+	{
+		// NVENC may access the registered D3D11 resource and its immediate
+		// context internally while submitting the encode request.
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		nvStatus = m_nvenc.nvEncEncodePicture(m_encoderHandle, &picParams);
+	}
 	if (nvStatus == NV_ENC_ERR_NEED_MORE_INPUT)
 	{
 		if (forceKeyFrame)
@@ -1212,31 +1234,23 @@ bool D3D11NvEncoder_Impl::Flush()
 	if (!m_encoderHandle)
 		return true;
 
-	NvEncPacket packet;
-
 	NV_ENC_PIC_PARAMS picParams = {};
 	picParams.version = NV_ENC_PIC_PARAMS_VER;
 	picParams.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
 	picParams.inputPitch = 0;
+	const uint32_t completionIndex = GetNextOutputFrameIndex();
+	picParams.completionEvent = GetCompletionEvent(completionIndex);
 
-	if (!NVENC_API_CALL(m_nvenc.nvEncEncodePicture(m_encoderHandle, &picParams)))
+	bool sendSucceeded = false;
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		sendSucceeded = NVENC_API_CALL(
+			m_nvenc.nvEncEncodePicture(m_encoderHandle, &picParams));
+	}
+	if (!sendSucceeded)
 		return false;
 
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
-	{
-		try
-		{
-			if (!GetEncodedPacket(i, packet))
-				break;
-		}
-		catch (...)
-		{
-			printf_s("[NVENC ERROR] Exception occurred during Flush().\n");
-			break;
-		}
-	}
-
-	return true;
+	return WaitForCompletionEvent(completionIndex);
 }
 
 const NvEncInputFrame* D3D11NvEncoder_Impl::GetNextInputFrame()
@@ -1265,7 +1279,13 @@ bool D3D11NvEncoder_Impl::MapInputResources(uint32_t index)
 
 	mapInputResource.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
 	mapInputResource.registeredResource = m_registeredResources[index];
-	if (!NVENC_API_CALL(m_nvenc.nvEncMapInputResource(m_encoderHandle, &mapInputResource)))
+	bool mapSucceeded = false;
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		mapSucceeded = NVENC_API_CALL(
+			m_nvenc.nvEncMapInputResource(m_encoderHandle, &mapInputResource));
+	}
+	if (!mapSucceeded)
 		return false;
 
 	m_mappedInputBuffers[index] = mapInputResource.mappedResource;
@@ -1280,7 +1300,13 @@ bool D3D11NvEncoder_Impl::UnmapInputResources(uint32_t index)
 
 	if (m_mappedInputBuffers[index])
 	{
-		if (!NVENC_API_CALL(m_nvenc.nvEncUnmapInputResource(m_encoderHandle, m_mappedInputBuffers[index])))
+		bool unmapSucceeded = false;
+		{
+			D3D11ImmediateContextGuard contextGuard(m_contextGate);
+			unmapSucceeded = NVENC_API_CALL(
+				m_nvenc.nvEncUnmapInputResource(m_encoderHandle, m_mappedInputBuffers[index]));
+		}
+		if (!unmapSucceeded)
 			return false;
 
 		m_mappedInputBuffers[index] = nullptr;

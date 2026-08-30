@@ -1,5 +1,6 @@
 ﻿#include "pch.h"
 #include "D3D11VideoProcessorNV12.h"
+#include "../../D3D11EngineInterface/ID3D11ImmediateContextGate.h"
 
 #include <stdio.h> // for printf_s, fopen_s, fwrite
 
@@ -16,7 +17,8 @@ bool D3D11VideoProcessorNV12::Initialize(
 	ID3D11Device* device,
 	ID3D11DeviceContext* context,
 	int32_t width,
-	int32_t height)
+	int32_t height,
+	ID3D11ImmediateContextGate* contextGate)
 {
 	// D3D11Texture BGRA 를 NV12 로 변환하는 DeD11VideoProcessor 를 초기화 한다.
 
@@ -29,6 +31,7 @@ bool D3D11VideoProcessorNV12::Initialize(
 	// 레퍼런스 카운트 증가. Shutdown 에서 Release 호출 필수
 	m_D3D11Device = device;
 	m_D3D11Context = context;
+	m_contextGate = contextGate;
 
 	m_D3D11Device->AddRef();
 	m_D3D11Context->AddRef();
@@ -87,14 +90,17 @@ bool D3D11VideoProcessorNV12::Initialize(
 	colorSpace.YCbCr_xvYCC = 0;    // 0 : 기존 YCbCr, 1 : 확장된 YCbCr(xvYCC)
 	colorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
 
-	m_videoContext->VideoProcessorSetStreamColorSpace(m_processor, 0, &colorSpace);
-	m_videoContext->VideoProcessorSetOutputColorSpace(m_processor, &colorSpace);
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		m_videoContext->VideoProcessorSetStreamColorSpace(m_processor, 0, &colorSpace);
+		m_videoContext->VideoProcessorSetOutputColorSpace(m_processor, &colorSpace);
 
-	// Input, Output 에서 처리될 프레임의 ROI 를 설정
-	RECT rect = { 0, 0, (LONG)width, (LONG)height };
-	m_videoContext->VideoProcessorSetStreamSourceRect(m_processor, 0, TRUE, &rect);
-	m_videoContext->VideoProcessorSetStreamDestRect(m_processor, 0, TRUE, &rect);
-	m_videoContext->VideoProcessorSetOutputTargetRect(m_processor, TRUE, &rect);
+		// Input, Output 에서 처리될 프레임의 ROI 를 설정
+		RECT rect = { 0, 0, (LONG)width, (LONG)height };
+		m_videoContext->VideoProcessorSetStreamSourceRect(m_processor, 0, TRUE, &rect);
+		m_videoContext->VideoProcessorSetStreamDestRect(m_processor, 0, TRUE, &rect);
+		m_videoContext->VideoProcessorSetOutputTargetRect(m_processor, TRUE, &rect);
+	}
 
 	return true;
 }
@@ -205,13 +211,17 @@ bool D3D11VideoProcessorNV12::Convert(uint32_t index)
 	stream.Enable = TRUE;
 	stream.pInputSurface = m_inputViews[index];
 
-	HRESULT hr = m_videoContext->VideoProcessorBlt(
-		m_processor,
-		m_outputViews[index],
-		0,
-		1,
-		&stream
-	);
+	HRESULT hr = E_FAIL;
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		hr = m_videoContext->VideoProcessorBlt(
+			m_processor,
+			m_outputViews[index],
+			0,
+			1,
+			&stream
+		);
+	}
 
 	return SUCCEEDED(hr);
 }
@@ -230,6 +240,7 @@ void D3D11VideoProcessorNV12::Destory()
 	SafeRelease(m_videoDevice);
 	SafeRelease(m_D3D11Context);
 	SafeRelease(m_D3D11Device);
+	m_contextGate = nullptr;
 }
 
 void D3D11VideoProcessorNV12::ReleaseInputViews()
@@ -299,10 +310,18 @@ void D3D11VideoProcessorNV12::SaveNV12ToFile(ID3D11Texture2D* NV12Texture, const
 	if (FAILED(hr))
 		return;
 
-	m_D3D11Context->CopyResource(stagingTexture, NV12Texture);
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		m_D3D11Context->CopyResource(stagingTexture, NV12Texture);
+	}
 
 	D3D11_MAPPED_SUBRESOURCE mapped = {};
-	if (SUCCEEDED(m_D3D11Context->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped)))
+	HRESULT mapHr = E_FAIL;
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		mapHr = m_D3D11Context->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped);
+	}
+	if (SUCCEEDED(mapHr))
 	{
 		// 실제 시스템의 Pitch 출력 (여기서 2048 등이 찍힐 겁니다)
 		printf("[Debug] Width: %u, Height: %u, Actual Pitch: %u\n", desc.Width, desc.Height, mapped.RowPitch);
@@ -335,7 +354,10 @@ void D3D11VideoProcessorNV12::SaveNV12ToFile(ID3D11Texture2D* NV12Texture, const
 			fclose(fp);
 			printf_s("[Success] File saved. Expected size: %lld bytes.\n", fileSize);
 		}
-		m_D3D11Context->Unmap(stagingTexture, 0);
+		{
+			D3D11ImmediateContextGuard contextGuard(m_contextGate);
+			m_D3D11Context->Unmap(stagingTexture, 0);
+		}
 	}
 
 	SafeRelease(stagingTexture);

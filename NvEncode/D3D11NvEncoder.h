@@ -10,6 +10,7 @@
 
 struct ID3D11Device;
 struct ID3D11Texture2D;
+class ID3D11ImmediateContextGate;
 class D3D11NvEncoder_Impl;
 
 class D3D11_NVIDIA_ENCODER_API D3D11NvEncoder
@@ -21,7 +22,12 @@ public:
 	D3D11NvEncoder(const D3D11NvEncoder&) = delete;
 	D3D11NvEncoder& operator=(const D3D11NvEncoder&) = delete;
 
-	bool Initialize(ID3D11Device* device, uint32_t width, uint32_t height, uint32_t encodeBufferCount);
+	bool Initialize(
+		ID3D11Device* device,
+		uint32_t width,
+		uint32_t height,
+		uint32_t encodeBufferCount,
+		ID3D11ImmediateContextGate* contextGate = nullptr);
 	void Destroy();
 
 	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);

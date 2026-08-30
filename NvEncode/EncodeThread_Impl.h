@@ -22,7 +22,7 @@ private:
 	void Run() override;
 
 private:
-	EncodeFrameQueue* m_queue = nullptr;
+	EncodeFrameQueue* m_encodeFrameQueue = nullptr;
 	D3D11NvEncoder* m_encoder = nullptr;
 	EncodeThread::EncodedFrameCallback m_encodedFrameCallback = nullptr;
 	void* m_encodedFrameCallbackUserData = nullptr;

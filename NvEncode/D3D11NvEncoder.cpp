@@ -16,9 +16,14 @@ D3D11NvEncoder::~D3D11NvEncoder()
 	m_impl = nullptr;
 }
 
-bool D3D11NvEncoder::Initialize(ID3D11Device* device, uint32_t width, uint32_t height, uint32_t encodeBufferCount)
+bool D3D11NvEncoder::Initialize(
+	ID3D11Device* device,
+	uint32_t width,
+	uint32_t height,
+	uint32_t encodeBufferCount,
+	ID3D11ImmediateContextGate* contextGate)
 {
-	return m_impl && m_impl->Initialize(device, width, height, encodeBufferCount);
+	return m_impl && m_impl->Initialize(device, width, height, encodeBufferCount, contextGate);
 }
 
 void D3D11NvEncoder::Destroy()

@@ -21,9 +21,10 @@ bool D3D11NvEncoder::Initialize(
 	uint32_t width,
 	uint32_t height,
 	uint32_t encodeBufferCount,
-	ID3D11ImmediateContextGate* contextGate)
+	ID3D11ImmediateContextGate* contextGate,
+	bool enableAsyncPipeline)
 {
-	return m_impl && m_impl->Initialize(device, width, height, encodeBufferCount, contextGate);
+	return m_impl && m_impl->Initialize(device, width, height, encodeBufferCount, contextGate, enableAsyncPipeline);
 }
 
 void D3D11NvEncoder::Destroy()
@@ -31,6 +32,14 @@ void D3D11NvEncoder::Destroy()
 	if (m_impl)
 	{
 		m_impl->Destroy();
+	}
+}
+
+void D3D11NvEncoder::SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData)
+{
+	if (m_impl)
+	{
+		m_impl->SetEncodedPacketCallback(callback, userData);
 	}
 }
 
@@ -45,6 +54,31 @@ void D3D11NvEncoder::RequestKeyFrame()
 	{
 		m_impl->RequestKeyFrame();
 	}
+}
+
+bool D3D11NvEncoder::CanSubmitFrame() const
+{
+	return m_impl && m_impl->CanSubmitFrame();
+}
+
+bool D3D11NvEncoder::SubmitFrame(uint64_t frameId)
+{
+	return m_impl && m_impl->SubmitFrame(frameId);
+}
+
+uint32_t D3D11NvEncoder::GetPendingFrameCount() const
+{
+	return m_impl ? m_impl->GetPendingFrameCount() : 0;
+}
+
+bool D3D11NvEncoder::WaitForPendingFrames(uint32_t timeoutMilliseconds) const
+{
+	return m_impl && m_impl->WaitForPendingFrames(timeoutMilliseconds);
+}
+
+bool D3D11NvEncoder::IsAsyncPipelineEnabled() const
+{
+	return m_impl && m_impl->IsAsyncPipelineEnabled();
 }
 
 bool D3D11NvEncoder::DoEncode(NvEncPacket& encodeResultPacket)

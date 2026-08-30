@@ -148,6 +148,7 @@
     <ClCompile Include="..\NvEncode\D3D11NvEncoder.cpp" />
     <ClCompile Include="..\NvEncode\D3D11NvEncoder_Impl.cpp" />
     <ClCompile Include="..\NvEncode\D3D11VideoProcessorNV12.cpp" />
+    <ClCompile Include="..\NvEncode\EncodeCompletionThread.cpp" />
     <ClCompile Include="..\NvEncode\EncodeFrameQueue.cpp" />
     <ClCompile Include="..\NvEncode\EncodeThread.cpp" />
     <ClCompile Include="..\NvEncode\EncodeThread_Impl.cpp" />
@@ -165,6 +166,7 @@
     <ClInclude Include="..\NvEncode\D3D11NvEncoder.h" />
     <ClInclude Include="..\NvEncode\D3D11NvEncoder_Impl.h" />
     <ClInclude Include="..\NvEncode\D3D11VideoProcessorNV12.h" />
+    <ClInclude Include="..\NvEncode\EncodeCompletionThread.h" />
     <ClInclude Include="..\NvEncode\EncodeFrameQueue.h" />
     <ClInclude Include="..\NvEncode\EncodeThread.h" />
     <ClInclude Include="..\NvEncode\EncodeThread_Impl.h" />

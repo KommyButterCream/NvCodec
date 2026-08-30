@@ -41,6 +41,9 @@
     <ClCompile Include="..\NvEncode\D3D11NvEncoder_Impl.cpp">
       <Filter>NvEncode</Filter>
     </ClCompile>
+    <ClCompile Include="..\NvEncode\EncodeCompletionThread.cpp">
+      <Filter>NvEncode</Filter>
+    </ClCompile>
     <ClCompile Include="..\NvEncode\EncodeFrameQueue.cpp">
       <Filter>NvEncode</Filter>
     </ClCompile>
@@ -80,6 +83,9 @@
       <Filter>NvDecode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvEncode\D3D11NvEncoder_Impl.h">
+      <Filter>NvEncode</Filter>
+    </ClInclude>
+    <ClInclude Include="..\NvEncode\EncodeCompletionThread.h">
       <Filter>NvEncode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvEncode\EncodeFrameQueue.h">

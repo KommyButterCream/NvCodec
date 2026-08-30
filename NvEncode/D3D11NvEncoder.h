@@ -16,6 +16,8 @@ class D3D11NvEncoder_Impl;
 class D3D11_NVIDIA_ENCODER_API D3D11NvEncoder
 {
 public:
+	using EncodedPacketCallback = void (*)(const NvEncPacket& packet, void* userData);
+
 	D3D11NvEncoder();
 	~D3D11NvEncoder();
 
@@ -27,11 +29,18 @@ public:
 		uint32_t width,
 		uint32_t height,
 		uint32_t encodeBufferCount,
-		ID3D11ImmediateContextGate* contextGate = nullptr);
+		ID3D11ImmediateContextGate* contextGate = nullptr,
+		bool enableAsyncPipeline = true);
 	void Destroy();
 
+	void SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData);
 	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
 	void RequestKeyFrame();
+	bool CanSubmitFrame() const;
+	bool SubmitFrame(uint64_t frameId);
+	uint32_t GetPendingFrameCount() const;
+	bool WaitForPendingFrames(uint32_t timeoutMilliseconds = 20'000U) const;
+	bool IsAsyncPipelineEnabled() const;
 	bool DoEncode(NvEncPacket& encodeResultPacket);
 
 private:

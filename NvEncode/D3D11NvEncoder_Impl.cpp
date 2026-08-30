@@ -2,6 +2,7 @@
 #include "D3D11NvEncoder_Impl.h"
 #include "../../D3D11EngineInterface/ID3D11ImmediateContextGate.h"
 #include "D3D11VideoProcessorNV12.h"
+#include "EncodeCompletionThread.h"
 
 #include <new> // for std::nothrow
 #include <assert.h> // for assert
@@ -224,12 +225,15 @@ bool D3D11NvEncoder_Impl::Initialize(
 	uint32_t width,
 	uint32_t height,
 	uint32_t encodeBufferCount,
-	ID3D11ImmediateContextGate* contextGate)
+	ID3D11ImmediateContextGate* contextGate,
+	bool enableAsyncPipeline)
 {
-	if (!device)
+	if (!device || width == 0 || height == 0 || !IsPowerOfTwo(encodeBufferCount))
 	{
 		return false;
 	}
+
+	Destroy();
 
 	// 건네 받은 D3D11 Device, Context 포인터의 참조 횟수 증가
 	// Destroy 시점에 Release 호출 필요
@@ -241,49 +245,100 @@ bool D3D11NvEncoder_Impl::Initialize(
 	m_width = width;
 	m_height = height;
 	m_encodeBufferCount = encodeBufferCount;
+	m_asyncPipelineEnabled = enableAsyncPipeline;
 
 	assert(IsPowerOfTwo(m_encodeBufferCount) && "encodeBufferCount must be a power of two");
-	if (!IsPowerOfTwo(m_encodeBufferCount))
-	{
-		return false;
-	}
+	m_timeStamp = 0;
+	m_inputFrameIndex = 0;
+	m_outputFrameIndex = 0;
+	::InterlockedExchange(&m_pendingFrameCount, 0);
+	::InterlockedExchange(&m_forceKeyFrame, FALSE);
+	::InterlockedExchange(&m_acceptFrames, FALSE);
 
 
 	// 단계별 초기화 진행
 	// 실패 시 goto 로 정리 순서 보장
 
 	if (!LoadNvEncApi())
-		return false;
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: LoadNvEncApi.\n");
+		goto fail_device;
+	}
 
 	if (!OpenEncodeSession())
-		return false;
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: OpenEncodeSession.\n");
+		goto fail_device;
+	}
 
 	if (!InitializeEncoder())
-		goto fail_encoder;
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeEncoder.\n");
+		goto fail_converter;
+	}
 
 	if (!InitializeBGRAtoNV12Converter())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeBGRAtoNV12Converter.\n");
 		goto fail_converter;
+	}
 
 	if (!InitializeAsyncEvent())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeAsyncEvent.\n");
 		goto fail_async_event;
+	}
 
 	if (!InitializeBitstreamBuffers())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeBitstreamBuffers.\n");
 		goto fail_bitstream;
+	}
 
 	if (!InitializeRegisteredResources())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeRegisteredResources.\n");
 		goto fail_registered_resources;
+	}
 
 	if (!InitializeD3D11InputBuffers())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeD3D11InputBuffers.\n");
 		goto fail_input_buffers;
+	}
 
 	if (!InitializeMappedInputBuffers())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeMappedInputBuffers.\n");
 		goto fail_mapped_inputs;
+	}
 
 	if (!InitializeOutputFrameBuffers())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeOutputFrameBuffers.\n");
 		goto fail_output_frames;
+	}
+
+	if (!InitializeInFlightFrames())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeInFlightFrames.\n");
+		goto fail_in_flight_frames;
+	}
+
+	if (m_asyncPipelineEnabled && !InitializeEncodeCompletionThread())
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeEncodeCompletionThread.\n");
+		goto fail_completion_thread;
+	}
+
+	::InterlockedExchange(&m_acceptFrames, TRUE);
 
 	return true;
 
+fail_completion_thread:
+	DestroyInFlightFrames();
+fail_in_flight_frames:
+	DestroyOutputFrameBuffers();
 fail_output_frames:
 	DestoryMappedInputBuffers();
 fail_mapped_inputs:
@@ -298,18 +353,34 @@ fail_async_event:
 	DestroyBGRAtoNV12Converter();
 fail_converter:
 	DestroyEncoder();
-fail_encoder:
+	SafeRelease(m_D3D11Context);
+	SafeRelease(m_D3D11Device);
+	m_contextGate = nullptr;
+	return false;
+fail_device:
+	DestroyEncoder();
+	SafeRelease(m_D3D11Context);
+	SafeRelease(m_D3D11Device);
+	m_contextGate = nullptr;
 	return false;
 }
 
 void D3D11NvEncoder_Impl::Destroy()
 {
-	// EOS 보내서 Encoder 내부 버퍼를 비워준다.
-	if (!Flush())
+	::InterlockedExchange(&m_acceptFrames, FALSE);
+
+	if (m_encodeCompletionThread)
+	{
+		StopEncodeCompletionThread();
+	}
+	else if (!Flush())
 	{
 		printf_s("[NVENC ERROR] Flush failed during Destroy().\n");
 	}
 
+	SetEncodedPacketCallback(nullptr, nullptr);
+
+	DestroyInFlightFrames();
 	DestroyOutputFrameBuffers();
 	DestoryMappedInputBuffers();
 	DestroyRegisteredResources();
@@ -324,12 +395,24 @@ void D3D11NvEncoder_Impl::Destroy()
 	m_contextGate = nullptr;
 }
 
+void D3D11NvEncoder_Impl::SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData)
+{
+	::AcquireSRWLockExclusive(&m_callbackLock);
+	m_encodedPacketCallback = callback;
+	m_encodedPacketCallbackUserData = userData;
+	::ReleaseSRWLockExclusive(&m_callbackLock);
+}
+
 bool D3D11NvEncoder_Impl::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
 {
 	// Encode 를 수행하기 위한 텍스쳐를 BGRA Texture Pool 에 복사한다.
 	if (!m_encoderHandle)
 	{
 		printf_s("[NVENC ERROR] Encoder handle is not initialized.\n");
+		return false;
+	}
+	if (!CanSubmitFrame())
+	{
 		return false;
 	}
 
@@ -357,62 +440,90 @@ void D3D11NvEncoder_Impl::RequestKeyFrame()
 	::InterlockedExchange(&m_forceKeyFrame, TRUE);
 }
 
-bool D3D11NvEncoder_Impl::DoEncode(NvEncPacket& encodeResultPacket)
+bool D3D11NvEncoder_Impl::CanSubmitFrame() const
 {
-	// 실제 Encoding 처리 시퀀스
-	// BGRA -> NV12 변환 (D3D11VideoProcessorNV12)
-	// Input Resource Map
-	// Encode
-	// Encode 결과 Bitstream 가져오기
-	// Resource Unmap
-	// 순서로 Encoding 이 수행 된다.
+	return m_encoderHandle && m_inFlightFrames &&
+		::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_acceptFrames), TRUE, TRUE) == TRUE &&
+		GetPendingFrameCount() < m_encodeBufferCount;
+}
+
+bool D3D11NvEncoder_Impl::SubmitFrame(uint64_t frameId)
+{
+	if (!CanSubmitFrame())
+		return false;
 
 	const uint32_t inputFrameIndex = GetNextInputFrameIndex();
-	const uint32_t outputFrameIndex = GetNextOutputFrameIndex();
+	NvEncInFlightFrame& inFlightFrame = m_inFlightFrames[inputFrameIndex];
+	if (::InterlockedCompareExchange(&inFlightFrame.submitted, TRUE, TRUE) == TRUE)
+		return false;
 
-	// BGRA -> NV12 변환 (D3D11VideoProcessorNV12)
 	if (!m_converter || !m_converter->Convert(inputFrameIndex))
 		return false;
 
-	//m_converter->SaveNV12ToFile(outputFrameIndex, "../convert.nv12");
-
-	// Input Resource Map
 	if (!MapInputResources(inputFrameIndex))
 		return false;
 
-	// Encode
-	// NVENC 는 내부 버퍼링 때문에 Encode 결과가 바로 안나올 수 도 있다.
-	// 그런 경우 needsMoreInput 플래그가 설정된다.
-	bool needsMoreInput = false;
-	if (!EncodeFrame(inputFrameIndex, needsMoreInput))
+	if (!EncodeFrame(inputFrameIndex))
 	{
 		UnmapInputResources(inputFrameIndex);
 		return false;
 	}
 
-	if (inputFrameIndex != outputFrameIndex)
-	{
-		__debugbreak();
-	}
-	// Encode 결과 Bitstream 가져오기
-	// Encode 결과가 준비된 경우에만 가져오도록 한다.
-	if (!needsMoreInput)
-	{
-		if (!GetEncodedPacket(outputFrameIndex, encodeResultPacket))
-		{
-			UnmapInputResources(inputFrameIndex);
-			return false;
-		}
-		m_outputFrameIndex++;
-	}
+	if (GetPendingFrameCount() == 0 && m_allSlotsFreeEvent)
+		::ResetEvent(m_allSlotsFreeEvent);
 
+	inFlightFrame.frameId = frameId;
+	::InterlockedExchange(&inFlightFrame.submitted, TRUE);
 	m_inputFrameIndex++;
+	::InterlockedIncrement(&m_pendingFrameCount);
+	if (m_encodeCompletionThread)
+		m_encodeCompletionThread->NotifyFrameSubmitted();
+	return true;
+}
 
-	// Resource Unmap
-	if (!UnmapInputResources(inputFrameIndex))
+uint32_t D3D11NvEncoder_Impl::GetPendingFrameCount() const
+{
+	return static_cast<uint32_t>(::InterlockedCompareExchange(
+		const_cast<volatile LONG*>(&m_pendingFrameCount), 0, 0));
+}
+
+bool D3D11NvEncoder_Impl::WaitForPendingFrames(uint32_t timeoutMilliseconds) const
+{
+	if (GetPendingFrameCount() == 0)
+		return true;
+	if (!m_allSlotsFreeEvent)
+		return false;
+	if (::WaitForSingleObject(m_allSlotsFreeEvent, timeoutMilliseconds) != WAIT_OBJECT_0)
+		return false;
+	return GetPendingFrameCount() == 0;
+}
+
+bool D3D11NvEncoder_Impl::IsAsyncPipelineEnabled() const
+{
+	return m_asyncPipelineEnabled;
+}
+
+bool D3D11NvEncoder_Impl::DoEncode(NvEncPacket& encodeResultPacket)
+{
+	if (m_asyncPipelineEnabled)
 		return false;
 
-	return true;
+	if (!SubmitFrame(0))
+		return false;
+
+	const uint32_t outputFrameIndex = GetNextOutputFrameIndex();
+	const NvEncPacketStatus completionStatus = WaitForCompletionEvent(outputFrameIndex, true);
+	if (completionStatus != NvEncPacketStatus::PacketReady || !GetEncodedPacket(outputFrameIndex, encodeResultPacket))
+		return false;
+
+	NvEncInFlightFrame& inFlightFrame = m_inFlightFrames[outputFrameIndex];
+	encodeResultPacket.frameId = inFlightFrame.frameId;
+	const bool unmapSucceeded = UnmapInputResources(outputFrameIndex);
+	inFlightFrame.frameId = 0;
+	::InterlockedExchange(&inFlightFrame.submitted, FALSE);
+	++m_outputFrameIndex;
+	::InterlockedDecrement(&m_pendingFrameCount);
+	return unmapSucceeded;
 }
 
 bool D3D11NvEncoder_Impl::LoadNvEncApi()
@@ -533,7 +644,9 @@ bool D3D11NvEncoder_Impl::InitializeEncoder()
 	m_initParameters.maxEncodeHeight = m_height;
 	m_initParameters.enableMEOnlyMode = false;
 	m_initParameters.enableOutputInVidmem = false;
-	m_initParameters.enableEncodeAsync = GetCapabilityValue(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS::NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT);
+	m_initParameters.enableEncodeAsync = m_asyncPipelineEnabled
+		? GetCapabilityValue(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS::NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT)
+		: 0U;
 	m_initParameters.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
 	m_initParameters.tuningInfo = NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY;
 
@@ -564,6 +677,9 @@ bool D3D11NvEncoder_Impl::InitializeAsyncEvent()
 		return false;
 	}
 
+	if (m_initParameters.enableEncodeAsync == 0U)
+		return true;
+
 	// Async Event Create & Register
 	m_completionEvent = new (std::nothrow) HANDLE[m_encodeBufferCount]{};
 	if (!m_completionEvent)
@@ -589,6 +705,23 @@ bool D3D11NvEncoder_Impl::InitializeAsyncEvent()
 		}
 	}
 
+	m_eosCompletionEvent = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	if (!m_eosCompletionEvent)
+	{
+		DestoryAsyncEvent();
+		return false;
+	}
+
+	NV_ENC_EVENT_PARAMS eosEventParams = { NV_ENC_EVENT_PARAMS_VER };
+	eosEventParams.completionEvent = m_eosCompletionEvent;
+	if (!NVENC_API_CALL(m_nvenc.nvEncRegisterAsyncEvent(m_encoderHandle, &eosEventParams)))
+	{
+		::CloseHandle(m_eosCompletionEvent);
+		m_eosCompletionEvent = nullptr;
+		DestoryAsyncEvent();
+		return false;
+	}
+
 	return true;
 }
 
@@ -602,27 +735,34 @@ void D3D11NvEncoder_Impl::DestoryAsyncEvent()
 		return;
 	}
 
-	if (!m_completionEvent)
+	if (m_completionEvent)
 	{
-		return;
-	}
-
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
-	{
-		HANDLE& completionEvent = m_completionEvent[i];
-		if (completionEvent)
+		for (uint32_t i = 0; i < m_encodeBufferCount; i++)
 		{
-			NV_ENC_EVENT_PARAMS eventParams = { NV_ENC_EVENT_PARAMS_VER };
-			eventParams.completionEvent = completionEvent;
-			NVENC_API_CALL(m_nvenc.nvEncUnregisterAsyncEvent(m_encoderHandle, &eventParams));
+			HANDLE& completionEvent = m_completionEvent[i];
+			if (completionEvent)
+			{
+				NV_ENC_EVENT_PARAMS eventParams = { NV_ENC_EVENT_PARAMS_VER };
+				eventParams.completionEvent = completionEvent;
+				NVENC_API_CALL(m_nvenc.nvEncUnregisterAsyncEvent(m_encoderHandle, &eventParams));
 
-			::CloseHandle(completionEvent);
-			completionEvent = nullptr;
+				::CloseHandle(completionEvent);
+				completionEvent = nullptr;
+			}
 		}
+
+		delete[] m_completionEvent;
+		m_completionEvent = nullptr;
 	}
 
-	delete[] m_completionEvent;
-	m_completionEvent = nullptr;
+	if (m_eosCompletionEvent)
+	{
+		NV_ENC_EVENT_PARAMS eventParams = { NV_ENC_EVENT_PARAMS_VER };
+		eventParams.completionEvent = m_eosCompletionEvent;
+		NVENC_API_CALL(m_nvenc.nvEncUnregisterAsyncEvent(m_encoderHandle, &eventParams));
+		::CloseHandle(m_eosCompletionEvent);
+		m_eosCompletionEvent = nullptr;
+	}
 }
 
 bool D3D11NvEncoder_Impl::InitializeMappedInputBuffers()
@@ -992,6 +1132,111 @@ void D3D11NvEncoder_Impl::ReleaseOutputFrameBuffer(NvEncOutputFrame& frame)
 	frame.isKeyFrame = false;
 }
 
+bool D3D11NvEncoder_Impl::InitializeInFlightFrames()
+{
+	m_inFlightFrames = new (std::nothrow) NvEncInFlightFrame[m_encodeBufferCount]{};
+	return m_inFlightFrames != nullptr;
+}
+
+void D3D11NvEncoder_Impl::DestroyInFlightFrames()
+{
+	delete[] m_inFlightFrames;
+	m_inFlightFrames = nullptr;
+	::InterlockedExchange(&m_pendingFrameCount, 0);
+	m_inputFrameIndex = 0;
+	m_outputFrameIndex = 0;
+}
+
+bool D3D11NvEncoder_Impl::InitializeEncodeCompletionThread()
+{
+	m_allSlotsFreeEvent = ::CreateEvent(nullptr, TRUE, TRUE, nullptr);
+	if (!m_allSlotsFreeEvent)
+		return false;
+
+	EncodeCompletionThread* completionThread = new (std::nothrow) EncodeCompletionThread();
+	if (!completionThread || !completionThread->Initialize(this))
+	{
+		delete completionThread;
+		::CloseHandle(m_allSlotsFreeEvent);
+		m_allSlotsFreeEvent = nullptr;
+		return false;
+	}
+
+	m_encodeCompletionThread = completionThread;
+	return true;
+}
+
+void D3D11NvEncoder_Impl::StopEncodeCompletionThread()
+{
+	::InterlockedExchange(&m_acceptFrames, FALSE);
+
+	if (m_encodeCompletionThread)
+	{
+		if (!Flush())
+		{
+			printf_s("[NVENC ERROR] Flush failed while stopping encode completion thread.\n");
+		}
+
+		m_encodeCompletionThread->Shutdown();
+		delete m_encodeCompletionThread;
+		m_encodeCompletionThread = nullptr;
+	}
+
+	if (m_allSlotsFreeEvent)
+	{
+		::CloseHandle(m_allSlotsFreeEvent);
+		m_allSlotsFreeEvent = nullptr;
+	}
+}
+
+void D3D11NvEncoder_Impl::SignalAllSlotsFree()
+{
+	if (m_allSlotsFreeEvent)
+		::SetEvent(m_allSlotsFreeEvent);
+}
+
+bool D3D11NvEncoder_Impl::ProcessNextOutput(bool waitForCompletion, bool invokeCallback)
+{
+	if (!m_encoderHandle || !m_inFlightFrames || GetPendingFrameCount() == 0)
+		return false;
+
+	const uint32_t outputFrameIndex = GetNextOutputFrameIndex();
+	NvEncInFlightFrame& inFlightFrame = m_inFlightFrames[outputFrameIndex];
+	if (::InterlockedCompareExchange(&inFlightFrame.submitted, TRUE, TRUE) != TRUE)
+		return false;
+
+	if (WaitForCompletionEvent(outputFrameIndex, waitForCompletion) != NvEncPacketStatus::PacketReady)
+		return false;
+
+	NvEncPacket packet = {};
+	if (!GetEncodedPacket(outputFrameIndex, packet))
+		return false;
+
+	packet.frameId = inFlightFrame.frameId;
+	if (!UnmapInputResources(outputFrameIndex))
+		return false;
+
+	if (invokeCallback)
+		InvokeEncodedPacketCallback(packet);
+
+	inFlightFrame.frameId = 0;
+	::InterlockedExchange(&inFlightFrame.submitted, FALSE);
+	++m_outputFrameIndex;
+	const LONG pendingFrameCount = ::InterlockedDecrement(&m_pendingFrameCount);
+	if (pendingFrameCount == 0)
+		SignalAllSlotsFree();
+
+	return true;
+}
+
+void D3D11NvEncoder_Impl::InvokeEncodedPacketCallback(const NvEncPacket& packet)
+{
+	::AcquireSRWLockShared(&m_callbackLock);
+	if (m_encodedPacketCallback)
+		m_encodedPacketCallback(packet, m_encodedPacketCallbackUserData);
+	::ReleaseSRWLockShared(&m_callbackLock);
+}
+
 bool D3D11NvEncoder_Impl::RegisterResource(void* buffer, NV_ENC_INPUT_RESOURCE_TYPE eResourceType, uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT eBufferFormat, NV_ENC_BUFFER_USAGE eBufferUsage, NV_ENC_REGISTERED_PTR& registeredResource)
 {
 	// NVENC 내부 리소스로 사용하기 위한 리소스 등록을 도와주는 래핑 함수
@@ -1084,12 +1329,10 @@ bool D3D11NvEncoder_Impl::SetNV12OutputTexture(ID3D11Texture2D** textures, uint3
 	return m_converter->SetOutputTextures(textures, bufferCount);
 }
 
-bool D3D11NvEncoder_Impl::EncodeFrame(uint32_t index, bool& needsMoreInput)
+bool D3D11NvEncoder_Impl::EncodeFrame(uint32_t index)
 {
 	// 사전에 Registered 된 Input Resource 의 Texture 를 Encode 한다.
 	// 여기서의 Input 은 NV12 타입일 것이고, Output 은 H264 로 Encode 된 Bitstream Buffer 이다.
-	needsMoreInput = false;
-
 	if (!m_encoderHandle || !m_mappedInputBuffers || !m_bitstreamBuffers || index >= m_encodeBufferCount)
 	{
 		return false;
@@ -1128,11 +1371,7 @@ bool D3D11NvEncoder_Impl::EncodeFrame(uint32_t index, bool& needsMoreInput)
 	}
 	if (nvStatus == NV_ENC_ERR_NEED_MORE_INPUT)
 	{
-		if (forceKeyFrame)
-		{
-			::InterlockedExchange(&m_forceKeyFrame, TRUE);
-		}
-		needsMoreInput = true;
+		// The input frame was accepted. Its output will be drained later.
 		return true;
 	}
 
@@ -1145,40 +1384,45 @@ bool D3D11NvEncoder_Impl::EncodeFrame(uint32_t index, bool& needsMoreInput)
 	return encodeSucceeded;
 }
 
-bool D3D11NvEncoder_Impl::WaitForCompletionEvent(uint32_t index)
+NvEncPacketStatus D3D11NvEncoder_Impl::WaitForCompletionEvent(uint32_t index, bool waitForCompletion)
 {
 	// Async Encode 를 사용하는 경우
 	// Encode 완료 이벤트를 NVENC 내부에서 Set 해준다.
 	// 이 Event 를 대기하여 동기를 맞춘다.
 	if (m_initParameters.enableEncodeAsync == 0U)
 	{
-		return true;
+		return NvEncPacketStatus::PacketReady;
 	}
 
-	DWORD dwResult = ::WaitForSingleObject(GetCompletionEvent(index), 20'000);
+	HANDLE completionEvent = GetCompletionEvent(index);
+	if (!completionEvent)
+		return NvEncPacketStatus::Error;
+
+	const DWORD timeoutMilliseconds = waitForCompletion ? 20'000U : 0U;
+	const DWORD dwResult = ::WaitForSingleObject(completionEvent, timeoutMilliseconds);
+
+	if (dwResult == WAIT_OBJECT_0)
+		return NvEncPacketStatus::PacketReady;
+
+	if (dwResult == WAIT_TIMEOUT && !waitForCompletion)
+		return NvEncPacketStatus::NotReady;
 
 	if (dwResult == WAIT_FAILED)
 	{
 		printf_s("[NVENC ERROR] Failed to encode frame.\n");
-		return false;
 	}
 	else if (dwResult == WAIT_TIMEOUT)
 	{
 		printf_s("[NVENC ERROR] Timeout encode frame.\n");
-		return false;
 	}
 
-	return true;
+	return NvEncPacketStatus::Error;
 }
 
 bool D3D11NvEncoder_Impl::GetEncodedPacket(uint32_t index, NvEncPacket& packet)
 {
 	// Encode 완료를 기다리고 H264 로 Encode 된 Bitstream Buffer 를 읽어온다.
 	if (!m_bitstreamBuffers || !m_outputFrames || index >= m_encodeBufferCount)
-		return false;
-
-	// Encode Complete 대기
-	if (!WaitForCompletionEvent(index))
 		return false;
 
 	// Encode Result 를 가져오기 위해 NVENC 내부 Bitstream Buffer Lock
@@ -1238,8 +1482,7 @@ bool D3D11NvEncoder_Impl::Flush()
 	picParams.version = NV_ENC_PIC_PARAMS_VER;
 	picParams.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
 	picParams.inputPitch = 0;
-	const uint32_t completionIndex = GetNextOutputFrameIndex();
-	picParams.completionEvent = GetCompletionEvent(completionIndex);
+	picParams.completionEvent = m_eosCompletionEvent;
 
 	bool sendSucceeded = false;
 	{
@@ -1250,7 +1493,36 @@ bool D3D11NvEncoder_Impl::Flush()
 	if (!sendSucceeded)
 		return false;
 
-	return WaitForCompletionEvent(completionIndex);
+	if (m_asyncPipelineEnabled)
+	{
+		if (m_encodeCompletionThread)
+			m_encodeCompletionThread->NotifyFrameSubmitted();
+		if (!WaitForPendingFrames(20'000U))
+			return false;
+	}
+	else
+	{
+		while (GetPendingFrameCount() > 0)
+		{
+			if (!ProcessNextOutput(true, false))
+				return false;
+		}
+	}
+
+	if (m_initParameters.enableEncodeAsync == 0U)
+		return true;
+
+	if (!m_eosCompletionEvent)
+		return false;
+
+	const DWORD waitResult = ::WaitForSingleObject(m_eosCompletionEvent, 20'000U);
+	if (waitResult != WAIT_OBJECT_0)
+	{
+		printf_s("[NVENC ERROR] Failed to flush encoder. waitResult=%lu\n", waitResult);
+		return false;
+	}
+
+	return true;
 }
 
 const NvEncInputFrame* D3D11NvEncoder_Impl::GetNextInputFrame()
@@ -1385,6 +1657,6 @@ DXGI_FORMAT D3D11NvEncoder_Impl::GetD3D11Format(NV_ENC_BUFFER_FORMAT eBufferForm
 
 HANDLE D3D11NvEncoder_Impl::GetCompletionEvent(uint32_t index)
 {
-	return m_completionEvent ? m_completionEvent[index] : nullptr;
+	return m_completionEvent && index < m_encodeBufferCount ? m_completionEvent[index] : nullptr;
 }
 

@@ -21,13 +21,15 @@ bool EncodeThread_Impl::Initialize(EncodeFrameQueue* queue, D3D11NvEncoder* enco
 
 	Shutdown();
 
-	// ¿ÜºÎ·ÎºÎÅÍ EncodeFrameQueue ¿Í NvEncoder ÀÔ·Â ¹× ¼³Á¤
+	// ì™¸ë¶€ë¡œë¶€í„° EncodeFrameQueue ì™€ NvEncoder ìž…ë ¥ ë° ì„¤ì •
 	m_encodeFrameQueue = queue;
 	m_encoder = encoder;
+	m_encoder->SetEncodedPacketCallback(EncodedPacketCallback, this);
 
-	// ¿£ÄÚµå ½º·¹µå ½ÃÀÛ
+	// ì—”ì½”ë“œ ìŠ¤ë ˆë“œ ì‹œìž‘
 	if (!Start())
 	{
+		m_encoder->SetEncodedPacketCallback(nullptr, nullptr);
 		m_encodeFrameQueue = nullptr;
 		m_encoder = nullptr;
 		return false;
@@ -38,14 +40,20 @@ bool EncodeThread_Impl::Initialize(EncodeFrameQueue* queue, D3D11NvEncoder* enco
 
 void EncodeThread_Impl::Shutdown()
 {
-	// ¿£ÄÚµù ÇÁ·¹ÀÓ Å¥ ºÎÅÍ Á¾·á ¾Ë¸²
+	// ì—”ì½”ë”© í”„ë ˆìž„ í ë¶€í„° ì¢…ë£Œ ì•Œë¦¼
 	if (m_encodeFrameQueue)
 	{
 		m_encodeFrameQueue->Shutdown();
 	}
 
-	// ½º·¹µå Á¾·á
+	// ìŠ¤ë ˆë“œ ì¢…ë£Œ
 	Stop();
+
+	if (m_encoder)
+	{
+		m_encoder->WaitForPendingFrames();
+		m_encoder->SetEncodedPacketCallback(nullptr, nullptr);
+	}
 
 	m_encodeFrameQueue = nullptr;
 	m_encoder = nullptr;
@@ -53,81 +61,81 @@ void EncodeThread_Impl::Shutdown()
 
 void EncodeThread_Impl::SetEncodedFrameCallback(EncodeThread::EncodedFrameCallback callback, void* userData)
 {
-	// ¿£ÄÚµù ³¡³­ ÈÄ È£ÃâµÉ ÄÝ¹é ÇÔ¼ö ¼³Á¤
+	// ì—”ì½”ë”© ëë‚œ í›„ í˜¸ì¶œë  ì½œë°± í•¨ìˆ˜ ì„¤ì •
 	m_encodedFrameCallback = callback;
 	m_encodedFrameCallbackUserData = userData;
 }
 
 void EncodeThread_Impl::SetKeyFrameRequestCallback(EncodeThread::KeyFrameRequestCallback callback, void* userData)
 {
-	// Å°ÇÁ·¹ÀÓÀ» Æ÷ÇÔÇÏ¿© ¿£ÄÚµùÀ» ÇÒ °ÍÀÎÁö È®ÀÎÇÏ´Â ÄÝ¹é ÇÔ¼ö ¼³Á¤
+	// í‚¤í”„ë ˆìž„ì„ í¬í•¨í•˜ì—¬ ì—”ì½”ë”©ì„ í•  ê²ƒì¸ì§€ í™•ì¸í•˜ëŠ” ì½œë°± í•¨ìˆ˜ ì„¤ì •
 	m_keyFrameRequestCallback = callback;
 	m_keyFrameRequestCallbackUserData = userData;
 }
 
 void EncodeThread_Impl::Run()
 {
-	// ½º·¹µå
 	while (!IsStopRequested())
 	{
-		// ¿£ÄÚµù ÇÁ·¹ÀÓ ¾ÆÀÌÅÛ ÇÏ³ª È¹µæ
 		EncodeFrameQueue::EncodeFrameItem* frameItem = m_encodeFrameQueue->AcquireReadFrame();
 		if (!frameItem)
 			break;
 
-		// Capture Engine ¿¡¼­ ¼³Á¤µÈ FrameID °ª ÀÐ¾î¿À±â
 		const uint64_t frameId = frameItem->frameHandle.frameId;
+		bool forceKeyFrame = frameItem->forceKeyFrame;
+		if (m_keyFrameRequestCallback && m_keyFrameRequestCallback(m_keyFrameRequestCallbackUserData))
+		{
+			forceKeyFrame = true;
+		}
 
-		// KeyFrame ÀÌ ÇÊ¿äÇÑÁö È®ÀÎÇÏ°í ÇÊ¿äÇÑ °æ¿ì ¿£ÄÚ´õ¿¡ Å° ÇÁ·¹ÀÓ Request ¼³Á¤
-		// ÀÌÈÄ PrepareFrameForEncode ¿¡¼­ ¿£ÄÚ´õ ¹öÆÛ¿¡ ÅØ½ºÃÄ º¹»çÇÏ¿© ¿£ÄÚµù ÁØºñ
+		if (forceKeyFrame)
+		{
+			// Keep the request pending even when this frame is dropped because all
+			// encoder slots are busy. EncodeFrame consumes it on actual submission.
+			m_encoder->RequestKeyFrame();
+		}
+
+		if (!m_encoder->CanSubmitFrame())
+		{
+			m_encodeFrameQueue->ReleaseReadFrame();
+			continue;
+		}
+
 		bool prepareSucceeded = false;
 		if (frameItem->frameHandle.texture)
 		{
-			// ÇÁ·¹ÀÓ ÇÚµé¿¡ ÅØ½ºÃÄ°¡ ÀÖ´Â °æ¿ì¿¡¸¸ ¼öÇà
-			bool forceKeyFrame = frameItem->forceKeyFrame;
-			if (m_keyFrameRequestCallback && m_keyFrameRequestCallback(m_keyFrameRequestCallbackUserData))
-			{
-				forceKeyFrame = true;
-			}
-
-			if (forceKeyFrame)
-			{
-				m_encoder->RequestKeyFrame();
-			}
-
-			// ¿£ÄÚ´õ ³»ºÎ ¹öÆÛ¿¡ ÅØ½ºÃÄ¸¦ º¹»çÇÏ¿© ÁØºñ
 			prepareSucceeded = m_encoder->PrepareFrameForEncode(frameItem->frameHandle.texture);
 		}
 
-		// µðÄÚµù ÇÁ·¹ÀÓ ¾ÆÀÌÅÛ ¹ÝÈ¯
-		// PrepareFrameForEncode ¿¡¼­ ³»ºÎ ¹öÆÛ·Î º¹»ç¸¦ ¼öÇàÇß±â ¶§¹®¿¡ ´õÀÌ»ó ÇÊ¿ä°¡ ¾ø´Ù.
-		// ´ÙÀ½ ÇÁ·¹ÀÓ Ä¸ÃÄ¿¡ ÇÊ¿äÇÑ ¹öÆÛ¸¦ ÁØºñÇÏ±â À§ÇØ ¹Ì¸® Release ÇØÁØ´Ù.
 		m_encodeFrameQueue->ReleaseReadFrame();
 
 		if (!prepareSucceeded)
 			continue;
 
-		// ¿£ÄÚµù ¿äÃ»
-		// µ¿±â½ÄÀ¸·Î ÀÛµ¿ÇÏ¹Ç·Î ¿£ÄÚµù °á°ú¸¦ °¡Á®¿Â´Ù.
-		NvEncPacket encodeResultPacket = {};
-		if (!m_encoder->DoEncode(encodeResultPacket))
+		if (!m_encoder->SubmitFrame(frameId))
 			continue;
-
-		if (!encodeResultPacket.data || encodeResultPacket.size == 0)
-			continue;
-
-		// ¾ØÄÚµù ¿Ï·á ÀÌÈÄ¿¡ ¼öÇà µÇ¾î¾ß ÇÒ ÄÝ¹é È£Ãâ
-		if (m_encodedFrameCallback)
-		{
-			EncodeThread::EncodedFrame encodedFrame = {};
-			encodedFrame.data = encodeResultPacket.data;
-			encodedFrame.size = encodeResultPacket.size;
-			encodedFrame.frameId = frameId;
-			encodedFrame.timestamp = encodeResultPacket.timestamp;
-			encodedFrame.frameType = encodeResultPacket.frameType;
-			encodedFrame.isKeyFrame = encodeResultPacket.isKeyFrame;
-
-			m_encodedFrameCallback(encodedFrame, m_encodedFrameCallbackUserData);
-		}
 	}
+}
+
+void EncodeThread_Impl::EncodedPacketCallback(const NvEncPacket& packet, void* userData)
+{
+	EncodeThread_Impl* self = static_cast<EncodeThread_Impl*>(userData);
+	if (self)
+		self->DispatchEncodedFrame(packet);
+}
+
+void EncodeThread_Impl::DispatchEncodedFrame(const NvEncPacket& packet)
+{
+	if (!m_encodedFrameCallback || !packet.data || packet.size == 0)
+		return;
+
+	EncodeThread::EncodedFrame encodedFrame = {};
+	encodedFrame.data = packet.data;
+	encodedFrame.size = packet.size;
+	encodedFrame.frameId = packet.frameId;
+	encodedFrame.timestamp = packet.timestamp;
+	encodedFrame.frameType = packet.frameType;
+	encodedFrame.isKeyFrame = packet.isKeyFrame;
+
+	m_encodedFrameCallback(encodedFrame, m_encodedFrameCallbackUserData);
 }

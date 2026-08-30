@@ -20,6 +20,8 @@ public:
 
 private:
 	void Run() override;
+	static void EncodedPacketCallback(const NvEncPacket& packet, void* userData);
+	void DispatchEncodedFrame(const NvEncPacket& packet);
 
 private:
 	EncodeFrameQueue* m_encodeFrameQueue = nullptr;

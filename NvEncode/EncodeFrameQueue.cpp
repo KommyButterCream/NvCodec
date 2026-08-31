@@ -1,59 +1,61 @@
-#include "pch.h"
+ï»¿#include "pch.h"
 #include "EncodeFrameQueue.h"
 
 #include <new> // for std::nothrow
+
+namespace
+{
+	// HELD ìŠ¬ë¡¯ê³¼ QUEUED ìŠ¬ë¡¯ì´ ê³µì¡´í•  ìˆ˜ ìˆì–´ì•¼ í•˜ë¯€ë¡œ ìµœì†Œ 2 ê°œê°€ í•„ìš”í•˜ë‹¤.
+	constexpr uint32_t kMinFrameCount = 2U;
+}
 
 EncodeFrameQueue::~EncodeFrameQueue()
 {
 	Shutdown();
 
-	if (m_items)
-	{
-		for (uint32_t index = 0; index < m_frameCount; ++index)
-		{
-			ReleaseFrameHandle(m_items[index].frameHandle);
-		}
-
-		delete[] m_items;
-		m_items = nullptr;
-	}
-
-	if (m_states)
-	{
-		delete[] m_states;
-		m_states = nullptr;
-	}
-
-	m_frameCount = 0;
+	::AcquireSRWLockExclusive(&m_lock);
+	ReleaseAllSlots_NoLock();
+	FreeStorage_NoLock();
+	::ReleaseSRWLockExclusive(&m_lock);
 }
 
 bool EncodeFrameQueue::Initialize(uint32_t frameCount, ReleaseFrameCallback releaseCallback, void* userData)
 {
+	// ë²„í¼ ìˆ˜ëŸ‰ì´ 2 ì˜ n ìŠ¹ì¼ ê²ƒì„ì„ ë³´ì¥ í•´ì•¼ í•œë‹¤.
+	// 1 ì´ë©´ HELD ìŠ¬ë¡¯ì´ ìˆëŠ” ë™ì•ˆ ë¹ˆ ìŠ¬ë¡¯ì´ ì—†ì–´ ëª¨ë“  EnqueueLatest ê°€ ì‹¤íŒ¨í•œë‹¤.
+	if (frameCount < kMinFrameCount || !IsPowerOfTwo(frameCount) || !releaseCallback)
+		return false;
+
+	// ì´ì „ ì„¸ì…˜ì„ ë‹«ê³  ëŒ€ê¸° ì¤‘ì¸ ë¦¬ë”ë¥¼ ê¹¨ìš´ë‹¤.
 	Shutdown();
 
-	// ¹öÆÛ ¼ö·®ÀÌ 2 ÀÇ n ½ÂÀÏ °ÍÀÓÀ» º¸Àå ÇØ¾ß ÇÑ´Ù.
-	if (frameCount == 0 || !IsPowerOfTwo(frameCount) || !releaseCallback)
-		return false;
+	::AcquireSRWLockExclusive(&m_lock);
 
-	if (m_items || m_states)
-		return false;
+	// ë‚¨ì•„ìˆëŠ” í”„ë ˆì„ í•¸ë“¤ì€ "ì´ì „" ì½œë°±ìœ¼ë¡œ ë°˜ë‚©í•´ì•¼ í•˜ë¯€ë¡œ êµì²´ ì „ì— ì •ë¦¬í•œë‹¤.
+	ReleaseAllSlots_NoLock();
 
-	// ¿£ÄÚµù µ¥ÀÌÅÍ¸¦ ÀúÀåÇÒ ±¸Á¶Ã¼ ¹öÆÛ ÇÒ´ç
-	m_items = new (std::nothrow) EncodeFrameItem[frameCount]();
-	if (!m_items)
-		return false;
-
-	// µ¿ÀÏ ¼ö·®¸¸Å­ÀÇ Slot »óÅÂ ÀúÀåÇÏ´Â ¹öÆÛ ÇÒ´ç
-	m_states = new (std::nothrow) SlotState[frameCount]();
-	if (!m_states)
+	if (m_frameCount != frameCount)
 	{
-		delete[] m_items;
-		m_items = nullptr;
-		return false;
+		FreeStorage_NoLock();
+
+		// ì—”ì½”ë”© ë°ì´í„°ë¥¼ ì €ì¥í•  êµ¬ì¡°ì²´ ë²„í¼ í• ë‹¹
+		EncodeFrameItem* items = new (std::nothrow) EncodeFrameItem[frameCount]();
+		// ë™ì¼ ìˆ˜ëŸ‰ë§Œí¼ì˜ Slot ìƒíƒœ ì €ì¥í•˜ëŠ” ë²„í¼ í• ë‹¹
+		SlotState* states = new (std::nothrow) SlotState[frameCount]();
+		if (!items || !states)
+		{
+			delete[] items;
+			delete[] states;
+			::ReleaseSRWLockExclusive(&m_lock);
+			return false;
+		}
+
+		m_items = items;
+		m_states = states;
+		m_frameCount = frameCount;
 	}
 
-	// »óÅÂ ÃÊ±âÈ­
-	m_frameCount = frameCount;
+	// ìƒíƒœ ì´ˆê¸°í™”
 	m_releaseCallback = releaseCallback;
 	m_releaseCallbackUserData = userData;
 	m_writePos = 0;
@@ -61,34 +63,71 @@ bool EncodeFrameQueue::Initialize(uint32_t frameCount, ReleaseFrameCallback rele
 	m_queuedCount = 0;
 	m_heldPos = 0;
 
-	::InterlockedExchange(&m_hasHeldFrame, FALSE);
-	::InterlockedExchange(&m_running, TRUE);
-	::InterlockedExchange(&m_dropCount, 0);
-	::InterlockedExchange(&m_processCount, 0);
-
 	for (uint32_t index = 0; index < m_frameCount; ++index)
 	{
 		m_states[index] = SLOT_FREE;
 		m_items[index] = EncodeFrameItem();
 	}
 
+	::InterlockedExchange(&m_hasHeldFrame, FALSE);
+	::InterlockedExchange(&m_dropCount, 0);
+	::InterlockedExchange(&m_processCount, 0);
+	::InterlockedExchange(&m_running, TRUE);
+
+	::ReleaseSRWLockExclusive(&m_lock);
+
 	return true;
 }
 
 void EncodeFrameQueue::Shutdown()
 {
-	// Running State ¸¦ º¯°æ ÈÄ Sleep ÁßÀÎ ½º·¹µå¸¦ ±ú¿ö ½º·¹µå°¡ Á¤»ó Á¾·á µÇµµ·Ï ÇÔ
+	// Running State ë¥¼ ë³€ê²½ í›„ Sleep ì¤‘ì¸ ìŠ¤ë ˆë“œë¥¼ ê¹¨ì›Œ ìŠ¤ë ˆë“œê°€ ì •ìƒ ì¢…ë£Œ ë˜ë„ë¡ í•¨
 	::InterlockedExchange(&m_running, FALSE);
 
 	::AcquireSRWLockExclusive(&m_lock);
+
+	// ì²˜ë¦¬ë˜ì§€ ì•Šê³  ë‚¨ì€ í”„ë ˆì„ì€ ìƒì‚°ìì—ê²Œ ë°˜ë‚©í•œë‹¤.
+	// HELD ìŠ¬ë¡¯ì€ ë¦¬ë” ìŠ¤ë ˆë“œê°€ ì†Œìœ í•˜ê³  ìˆìœ¼ë¯€ë¡œ ì—¬ê¸°ì„œ ê±´ë“œë¦¬ì§€ ì•ŠëŠ”ë‹¤.
+	DropQueuedFrames_NoLock();
+
 	::WakeAllConditionVariable(&m_cv);
 	::ReleaseSRWLockExclusive(&m_lock);
 }
 
+void EncodeFrameQueue::ReleaseAllSlots_NoLock()
+{
+	// HELD ë¥¼ í¬í•¨í•œ ëª¨ë“  ìŠ¬ë¡¯ì˜ í”„ë ˆì„ í•¸ë“¤ì„ ë°˜ë‚©í•œë‹¤.
+	// ë¦¬ë” ìŠ¤ë ˆë“œê°€ ì •ì§€í•œ ë’¤ì—ë§Œ í˜¸ì¶œí•´ì•¼ í•œë‹¤.
+	if (!m_items || !m_states)
+		return;
+
+	for (uint32_t index = 0; index < m_frameCount; ++index)
+	{
+		ReleaseFrameHandle(m_items[index].frameHandle);
+		m_items[index] = EncodeFrameItem();
+		m_states[index] = SLOT_FREE;
+	}
+
+	m_queuedCount = 0;
+	m_heldPos = 0;
+	::InterlockedExchange(&m_hasHeldFrame, FALSE);
+}
+
+void EncodeFrameQueue::FreeStorage_NoLock()
+{
+	delete[] m_items;
+	m_items = nullptr;
+
+	delete[] m_states;
+	m_states = nullptr;
+
+	m_frameCount = 0;
+}
+
 bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool forceKeyFrame)
 {
-	// ¿ÜºÎ¿¡¼­ ¹Ş¾Æ¿Â FrameHandle À» ÂüÁ¶ÇÏ¿© »ç¿ë¸¸ ÇÏ°í
-	// ReleaseFrameHandle ·Î ¹İÈ¯ ÇØÁÖ¾î¾ß ÇÑ´Ù.
+	// ì™¸ë¶€ì—ì„œ ë°›ì•„ì˜¨ FrameHandle ì„ ì°¸ì¡°í•˜ì—¬ ì‚¬ìš©ë§Œ í•˜ê³ 
+	// ReleaseFrameHandle ë¡œ ë°˜í™˜ í•´ì£¼ì–´ì•¼ í•œë‹¤.
 
 	if (!m_items || !m_states || !frameHandle.texture)
 		return false;
@@ -98,10 +137,10 @@ bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool f
 
 	::AcquireSRWLockExclusive(&m_lock);
 
-	// Queued µÇ¾î ÀÖ´Â ½½·ÔÀ» FREE »óÅÂ·Î º¯°æÇÏ¿© Drop
+	// Queued ë˜ì–´ ìˆëŠ” ìŠ¬ë¡¯ì„ FREE ìƒíƒœë¡œ ë³€ê²½í•˜ì—¬ Drop
 	DropQueuedFrames_NoLock();
 
-	// ÇÁ·¹ÀÓ ÇÚµéÀ» ÀúÀåÇÏ±â À§ÇÑ ºñ¾î ÀÖ´Â ½½·ÔÀ» Ã£´Â´Ù.
+	// í”„ë ˆì„ í•¸ë“¤ì„ ì €ì¥í•˜ê¸° ìœ„í•œ ë¹„ì–´ ìˆëŠ” ìŠ¬ë¡¯ì„ ì°¾ëŠ”ë‹¤.
 	const uint32_t freeIndex = FindNextSlotWithState(m_writePos, SLOT_FREE);
 	if (freeIndex >= m_frameCount)
 	{
@@ -109,21 +148,21 @@ bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool f
 		return false;
 	}
 
-	// ÇØ´ç À§Ä¡¿¡ ÇÁ·¹ÀÓ µ¥ÀÌÅÍ¸¦ ÀúÀåÇÏ°í
-	// ÇØ´ç ½½·ÔÀÌ Queued µÇ¾îÀÖÀ½À» »óÅÂ º¯°æ
+	// í•´ë‹¹ ìœ„ì¹˜ì— í”„ë ˆì„ ë°ì´í„°ë¥¼ ì €ì¥í•˜ê³ 
+	// í•´ë‹¹ ìŠ¬ë¡¯ì´ Queued ë˜ì–´ìˆìŒì„ ìƒíƒœ ë³€ê²½
 	m_writePos = freeIndex;
 	m_items[m_writePos].frameHandle = frameHandle;
 	m_items[m_writePos].forceKeyFrame = forceKeyFrame;
 	m_states[m_writePos] = SLOT_QUEUED;
 	m_readPos = m_writePos;
 
-	// Queued Item ¼ö·®À» Áõ°¡½ÃÅ°°í
-	// ´ÙÀ½ Write Pos ¸¦ ¾÷µ¥ÀÌÆ® ÇÑ´Ù.
+	// Queued Item ìˆ˜ëŸ‰ì„ ì¦ê°€ì‹œí‚¤ê³ 
+	// ë‹¤ìŒ Write Pos ë¥¼ ì—…ë°ì´íŠ¸ í•œë‹¤.
 	m_queuedCount = 1;
 	m_writePos = WrapIndex(m_writePos + 1);
 
-	// ½º·¹µå¸¦ ±ú¿ö ÀÛ¾÷À» ½ÃÅ°±â À§ÇØ
-	// Condition_Variable ¸¦ ±ú¿î´Ù.
+	// ìŠ¤ë ˆë“œë¥¼ ê¹¨ì›Œ ì‘ì—…ì„ ì‹œí‚¤ê¸° ìœ„í•´
+	// Condition_Variable ë¥¼ ê¹¨ìš´ë‹¤.
 	::WakeConditionVariable(&m_cv);
 	::ReleaseSRWLockExclusive(&m_lock);
 
@@ -139,8 +178,8 @@ EncodeFrameQueue::EncodeFrameItem* EncodeFrameQueue::AcquireReadFrame()
 
 	while (m_queuedCount == 0)
 	{
-		// Queued µÈ ÇÁ·¹ÀÓÀÌ ¾ø´Â °æ¿ì
-		// Lock À» ÇØÁ¦ÇÏ°í Sleep »óÅÂ·Î µé¾î°£´Ù.
+		// Queued ëœ í”„ë ˆì„ì´ ì—†ëŠ” ê²½ìš°
+		// Lock ì„ í•´ì œí•˜ê³  Sleep ìƒíƒœë¡œ ë“¤ì–´ê°„ë‹¤.
 		if (::InterlockedCompareExchange(&m_running, TRUE, TRUE) == FALSE)
 		{
 			::ReleaseSRWLockExclusive(&m_lock);
@@ -150,37 +189,30 @@ EncodeFrameQueue::EncodeFrameItem* EncodeFrameQueue::AcquireReadFrame()
 		::SleepConditionVariableSRW(&m_cv, &m_lock, INFINITE, 0);
 	}
 
-	// EnqueueFrame ³»ºÎ¿¡¼­ WakeConditionVariable ·Î Sleep À» ±ú¿î °æ¿ì
-	// ÇöÀç Ã³¸® ÁßÀÎ ÇÁ·¹ÀÓÀÌ ÀÖ´Ù¸é Á¾·áÇÑ´Ù.
+	// EnqueueFrame ë‚´ë¶€ì—ì„œ WakeConditionVariable ë¡œ Sleep ì„ ê¹¨ìš´ ê²½ìš°
+	// í˜„ì¬ ì²˜ë¦¬ ì¤‘ì¸ í”„ë ˆì„ì´ ìˆë‹¤ë©´ ì¢…ë£Œí•œë‹¤.
 	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
 	{
 		::ReleaseSRWLockExclusive(&m_lock);
 		return nullptr;
 	}
 
-	// readPos ¿¡ À§Ä¡ÇÑ ÇÁ·¹ÀÓ µ¥ÀÌÅÍ¸¦ ¹İÈ¯ÇÑ´Ù.
+	// readPos ì— ìœ„ì¹˜í•œ í”„ë ˆì„ ë°ì´í„°ë¥¼ ë°˜í™˜í•œë‹¤.
 	const uint32_t heldIndex = m_readPos;
 	m_states[heldIndex] = SLOT_HELD;
 
-	// m_heldPos ¸¦ ¾÷µ¥ÀÌÆ® ÇÏ¿© ReleaseReadFrame ¿¡¼­ »ç¿ëÇÏµµ·Ï ÇÑ´Ù.
-	// ¿ÜºÎ¿¡ Buffer Index ¸¦ ¾Ë¸®Áö ¾Ê±â À§ÇÔ.
+	// m_heldPos ë¥¼ ì—…ë°ì´íŠ¸ í•˜ì—¬ ReleaseReadFrame ì—ì„œ ì‚¬ìš©í•˜ë„ë¡ í•œë‹¤.
+	// ì™¸ë¶€ì— Buffer Index ë¥¼ ì•Œë¦¬ì§€ ì•Šê¸° ìœ„í•¨.
 	m_heldPos = heldIndex;
 	--m_queuedCount;
 	::InterlockedExchange(&m_hasHeldFrame, TRUE);
 
-	// ´ÙÀ½ Read Pos °è»ê
-	if (m_queuedCount > 0)
-	{
-		// Ã³¸®ÇØ¾ßÇÒ µ¥ÀÌÅÍ°¡ ³²¾Æ ÀÖ´Â °æ¿ì
-		// Queued µÇ¾î ÀÖ´Â Slot À» Ã£´Â´Ù.
-		m_readPos = FindNextSlotWithState(WrapIndex(heldIndex + 1), SLOT_QUEUED);
-	}
-	else
-	{
-		// Ã³¸®ÇØ¾ßÇÒ µ¥ÀÌÅÍ°¡ ¾ø´Â °æ¿ì
-		// ´Ü¼øÇÏ°Ô Read Pos ÀÎµ¦½º¸¸ Áõ°¡
-		m_readPos = WrapIndex(heldIndex + 1);
-	}
+	// ë‹¤ìŒ Read Pos ê³„ì‚°
+	//
+	// EnqueueLatest ê°€ í•­ìƒ queuedCount ë¥¼ 1 ë¡œ ë®ì–´ì“°ë¯€ë¡œ ìœ„ì˜ ê°ì†Œ í›„
+	// queuedCount ëŠ” ë°˜ë“œì‹œ 0 ì´ë‹¤. ì˜ˆì „ì—ëŠ” ì—¬ê¸°ì„œ SLOT_QUEUED ë¥¼ ì°¾ëŠ”
+	// ë¶„ê¸°ê°€ ìˆì—ˆì§€ë§Œ ë„ë‹¬ ë¶ˆê°€ëŠ¥í•œ ì£½ì€ ì½”ë“œì˜€ë‹¤.
+	m_readPos = WrapIndex(heldIndex + 1);
 
 	EncodeFrameItem* item = &m_items[heldIndex];
 	::ReleaseSRWLockExclusive(&m_lock);
@@ -190,15 +222,15 @@ EncodeFrameQueue::EncodeFrameItem* EncodeFrameQueue::AcquireReadFrame()
 
 void EncodeFrameQueue::ReleaseReadFrame()
 {
-	// AcquireReadFrame ·Î È¹µæÇÑ ÇÁ·¹ÀÓ µ¥ÀÌÅÍ¸¦ Release ÇÏ´Â ÇÔ¼ö
-	// AcquireReadFrame ¿¡¼­ ¼³Á¤ÇÑ m_heldPos À» »ç¿ëÇÑ´Ù.
+	// AcquireReadFrame ë¡œ íšë“í•œ í”„ë ˆì„ ë°ì´í„°ë¥¼ Release í•˜ëŠ” í•¨ìˆ˜
+	// AcquireReadFrame ì—ì„œ ì„¤ì •í•œ m_heldPos ì„ ì‚¬ìš©í•œë‹¤.
 	if (!m_items || !m_states)
 		return;
 
 	::AcquireSRWLockExclusive(&m_lock);
 
-	// ½ÇÁ¦·Î ÇÁ·¹ÀÓÀ» Acquire Çß´ÂÁö Ã¼Å© ÈÄ
-	// ½½·Ô »óÅÂ¸¦ ÃÊ±âÈ­ ÇØÁØ´Ù.
+	// ì‹¤ì œë¡œ í”„ë ˆì„ì„ Acquire í–ˆëŠ”ì§€ ì²´í¬ í›„
+	// ìŠ¬ë¡¯ ìƒíƒœë¥¼ ì´ˆê¸°í™” í•´ì¤€ë‹¤.
 	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
 	{
 		ReleaseFrameHandle(m_items[m_heldPos].frameHandle);
@@ -209,6 +241,11 @@ void EncodeFrameQueue::ReleaseReadFrame()
 	}
 
 	::ReleaseSRWLockExclusive(&m_lock);
+}
+
+bool EncodeFrameQueue::IsRunning() const
+{
+	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_running), TRUE, TRUE) != FALSE;
 }
 
 uint32_t EncodeFrameQueue::GetDropCount() const
@@ -223,7 +260,7 @@ uint32_t EncodeFrameQueue::GetProcessCount() const
 
 void EncodeFrameQueue::ReleaseFrameHandle(InputFrameHandle& frameHandle)
 {
-	// ¿ÜºÎ¿¡¼­ ¹Ş¾Æ¿Â FrameHandle À» ¹İÈ¯ ÇØÁÖ±â À§ÇÑ Callback È£Ãâ
+	// ì™¸ë¶€ì—ì„œ ë°›ì•„ì˜¨ FrameHandle ì„ ë°˜í™˜ í•´ì£¼ê¸° ìœ„í•œ Callback í˜¸ì¶œ
 
 	if (!frameHandle.texture)
 		return;
@@ -236,8 +273,8 @@ void EncodeFrameQueue::ReleaseFrameHandle(InputFrameHandle& frameHandle)
 
 void EncodeFrameQueue::DropQueuedFrames_NoLock()
 {
-	// Queued µÇ¾î ÀÖ´Â Slot À» Ã£¾Æ FREE »óÅÂ·Î º¯°æ½ÃÄÑ
-	// ´ë±â ÁßÀÎ ÇÁ·¹ÀÓÀ» Drop ½ÃÅ²´Ù.
+	// Queued ë˜ì–´ ìˆëŠ” Slot ì„ ì°¾ì•„ FREE ìƒíƒœë¡œ ë³€ê²½ì‹œì¼œ
+	// ëŒ€ê¸° ì¤‘ì¸ í”„ë ˆì„ì„ Drop ì‹œí‚¨ë‹¤.
 	for (uint32_t index = 0; index < m_frameCount; ++index)
 	{
 		if (m_states[index] != SLOT_QUEUED)
@@ -255,7 +292,7 @@ void EncodeFrameQueue::DropQueuedFrames_NoLock()
 
 uint32_t EncodeFrameQueue::FindNextSlotWithState(uint32_t start, SlotState state) const
 {
-	// Start Index ºÎÅÍ ½ÃÀÛÇÏ¿© ÀÔ·Â¹ŞÀº State ¿Í µ¿ÀÏÇÑ Slot Index ¸¦ ¹İÈ¯.
+	// Start Index ë¶€í„° ì‹œì‘í•˜ì—¬ ì…ë ¥ë°›ì€ State ì™€ ë™ì¼í•œ Slot Index ë¥¼ ë°˜í™˜.
 	if (!m_states || m_frameCount == 0)
 		return m_frameCount;
 
@@ -271,14 +308,14 @@ uint32_t EncodeFrameQueue::FindNextSlotWithState(uint32_t start, SlotState state
 
 uint32_t EncodeFrameQueue::WrapIndex(uint32_t index) const
 {
-	// ¹öÆÛ ¼ö·®ÀÌ 2ÀÇ n ½ÂÀ» º¸ÀåÇÏ¹Ç·Î
-	// Bit And ¿¬»êÀ» ÅëÇØ Warp-Around.
-	// '%' ¿¬»êº¸´Ù ¼Óµµ°¡ ºü¸£´Ù.
+	// ë²„í¼ ìˆ˜ëŸ‰ì´ 2ì˜ n ìŠ¹ì„ ë³´ì¥í•˜ë¯€ë¡œ
+	// Bit And ì—°ì‚°ì„ í†µí•´ Warp-Around.
+	// '%' ì—°ì‚°ë³´ë‹¤ ì†ë„ê°€ ë¹ ë¥´ë‹¤.
 	return index & (m_frameCount - 1);
 }
 
 bool EncodeFrameQueue::IsPowerOfTwo(uint32_t value) const
 {
-	// ÀÔ·Â¹ŞÀº ¼ö°¡ 2 ÀÇ n ½Â ÀÎÁö È®ÀÎÇÏ¿© »óÅÂ ¹İÈ¯
+	// ì…ë ¥ë°›ì€ ìˆ˜ê°€ 2 ì˜ n ìŠ¹ ì¸ì§€ í™•ì¸í•˜ì—¬ ìƒíƒœ ë°˜í™˜
 	return value != 0 && (value & (value - 1)) == 0;
 }

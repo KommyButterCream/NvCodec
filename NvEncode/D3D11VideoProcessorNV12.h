@@ -17,6 +17,9 @@ public:
 	D3D11VideoProcessorNV12();
 	~D3D11VideoProcessorNV12();
 
+	// 주의: 호출자가 contextGate 를 이미 획득한 상태로 호출해야 한다.
+	// (게이트는 재귀 획득이 불가능하므로 여기서 다시 잡지 않는다.)
+	// 전달받은 게이트는 Convert 등 이후 호출에서 사용한다.
 	bool Initialize(
 		ID3D11Device* device,
 		ID3D11DeviceContext* context,
@@ -32,14 +35,14 @@ public:
 		ID3D11Texture2D** textures,
 		uint32_t bufferCount);
 
-	bool Convert(uint32_t index);
+	bool Convert(uint32_t slot);
 
-	void Destory();
+	void Destroy();
 
 
 public:
 	void SaveNV12ToFile(ID3D11Texture2D* NV12Texture, const char* fileName);
-	void SaveNV12ToFile(uint32_t index, const char* fileName);
+	void SaveNV12ToFile(uint32_t slot, const char* fileName);
 
 private:
 	void ReleaseInputViews();

@@ -43,6 +43,14 @@ void D3D11NvEncoder::SetEncodedPacketCallback(EncodedPacketCallback callback, vo
 	}
 }
 
+void D3D11NvEncoder::SetErrorCallback(ErrorCallback callback, void* userData)
+{
+	if (m_impl)
+	{
+		m_impl->SetErrorCallback(callback, userData);
+	}
+}
+
 bool D3D11NvEncoder::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
 {
 	return m_impl && m_impl->PrepareFrameForEncode(bgraTexture);
@@ -84,4 +92,29 @@ bool D3D11NvEncoder::IsAsyncPipelineEnabled() const
 bool D3D11NvEncoder::DoEncode(NvEncPacket& encodeResultPacket)
 {
 	return m_impl && m_impl->DoEncode(encodeResultPacket);
+}
+
+bool D3D11NvEncoder::IsFaulted() const
+{
+	return m_impl && m_impl->IsFaulted();
+}
+
+void D3D11NvEncoder::GetStats(NvEncStats& stats) const
+{
+	if (m_impl)
+	{
+		m_impl->GetStats(stats);
+	}
+	else
+	{
+		stats = NvEncStats();
+	}
+}
+
+void D3D11NvEncoder::DebugFailNextOutputs(uint32_t count)
+{
+	if (m_impl)
+	{
+		m_impl->DebugFailNextOutputs(count);
+	}
 }

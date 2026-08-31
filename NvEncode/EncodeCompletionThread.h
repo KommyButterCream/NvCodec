@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "../../Core/Concurrency/ThreadBase.h"
 
@@ -12,12 +12,10 @@ public:
 
 	bool Initialize(D3D11NvEncoder_Impl* encoder);
 	void Shutdown();
-	void NotifyFrameSubmitted();
 
 private:
 	void Run() override;
 
 private:
 	D3D11NvEncoder_Impl* m_encoder = nullptr;
-	HANDLE m_frameSubmittedEvent = nullptr;
 };

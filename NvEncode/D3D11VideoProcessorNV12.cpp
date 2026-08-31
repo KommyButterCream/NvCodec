@@ -10,7 +10,7 @@ D3D11VideoProcessorNV12::D3D11VideoProcessorNV12()
 
 D3D11VideoProcessorNV12::~D3D11VideoProcessorNV12()
 {
-	Destory();
+	Destroy();
 }
 
 bool D3D11VideoProcessorNV12::Initialize(
@@ -25,7 +25,7 @@ bool D3D11VideoProcessorNV12::Initialize(
 	if (!device || !context)
 		return false;
 
-	Destory();
+	Destroy();
 
 	// 외부에서 받은 D3D11Device 와 D3D11DeviceContext 를 사용한다.
 	// 레퍼런스 카운트 증가. Shutdown 에서 Release 호출 필수
@@ -42,7 +42,7 @@ bool D3D11VideoProcessorNV12::Initialize(
 	hr = m_D3D11Device->QueryInterface(__uuidof(ID3D11VideoDevice), reinterpret_cast<void**>(&m_videoDevice));
 	if (FAILED(hr))
 	{
-		Destory();
+		Destroy();
 		return false;
 	}
 
@@ -51,7 +51,7 @@ bool D3D11VideoProcessorNV12::Initialize(
 	hr = m_D3D11Context->QueryInterface(__uuidof(ID3D11VideoContext), reinterpret_cast<void**>(&m_videoContext));
 	if (FAILED(hr))
 	{
-		Destory();
+		Destroy();
 		return false;
 	}
 
@@ -70,7 +70,7 @@ bool D3D11VideoProcessorNV12::Initialize(
 	hr = m_videoDevice->CreateVideoProcessorEnumerator(&desc, &m_enum);
 	if (FAILED(hr))
 	{
-		Destory();
+		Destroy();
 		return false;
 	}
 
@@ -78,7 +78,7 @@ bool D3D11VideoProcessorNV12::Initialize(
 	hr = m_videoDevice->CreateVideoProcessor(m_enum, 0, &m_processor);
 	if (FAILED(hr))
 	{
-		Destory();
+		Destroy();
 		return false;
 	}
 
@@ -90,17 +90,16 @@ bool D3D11VideoProcessorNV12::Initialize(
 	colorSpace.YCbCr_xvYCC = 0;    // 0 : 기존 YCbCr, 1 : 확장된 YCbCr(xvYCC)
 	colorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
 
-	{
-		D3D11ImmediateContextGuard contextGuard(m_contextGate);
-		m_videoContext->VideoProcessorSetStreamColorSpace(m_processor, 0, &colorSpace);
-		m_videoContext->VideoProcessorSetOutputColorSpace(m_processor, &colorSpace);
+	// 게이트는 호출자(D3D11NvEncoder_Impl::Initialize)가 이미 잡고 있다.
+	// 여기서 다시 잡으면 게이트가 재귀 불가라 데드락이다.
+	m_videoContext->VideoProcessorSetStreamColorSpace(m_processor, 0, &colorSpace);
+	m_videoContext->VideoProcessorSetOutputColorSpace(m_processor, &colorSpace);
 
-		// Input, Output 에서 처리될 프레임의 ROI 를 설정
-		RECT rect = { 0, 0, (LONG)width, (LONG)height };
-		m_videoContext->VideoProcessorSetStreamSourceRect(m_processor, 0, TRUE, &rect);
-		m_videoContext->VideoProcessorSetStreamDestRect(m_processor, 0, TRUE, &rect);
-		m_videoContext->VideoProcessorSetOutputTargetRect(m_processor, TRUE, &rect);
-	}
+	// Input, Output 에서 처리될 프레임의 ROI 를 설정
+	RECT rect = { 0, 0, (LONG)width, (LONG)height };
+	m_videoContext->VideoProcessorSetStreamSourceRect(m_processor, 0, TRUE, &rect);
+	m_videoContext->VideoProcessorSetStreamDestRect(m_processor, 0, TRUE, &rect);
+	m_videoContext->VideoProcessorSetOutputTargetRect(m_processor, TRUE, &rect);
 
 	return true;
 }
@@ -190,7 +189,7 @@ bool D3D11VideoProcessorNV12::SetOutputTextures(ID3D11Texture2D** textures, uint
 	return true;
 }
 
-bool D3D11VideoProcessorNV12::Convert(uint32_t index)
+bool D3D11VideoProcessorNV12::Convert(uint32_t slot)
 {
 	// BGRA -> NV12 변환 수행
 	// 사용자로 부터 입력받은 Index 의 Input View 를 Output View 에 변환 한다.
@@ -201,22 +200,22 @@ bool D3D11VideoProcessorNV12::Convert(uint32_t index)
 	const uint32_t availableBufferCount =
 		(m_inputViewCount < m_outputViewCount) ? m_inputViewCount : m_outputViewCount;
 
-	if (availableBufferCount == 0 || index >= availableBufferCount)
+	if (availableBufferCount == 0 || slot >= availableBufferCount)
 		return false;
 
-	if (!m_inputViews[index] || !m_outputViews[index])
+	if (!m_inputViews[slot] || !m_outputViews[slot])
 		return false;
 
 	D3D11_VIDEO_PROCESSOR_STREAM stream = {};
 	stream.Enable = TRUE;
-	stream.pInputSurface = m_inputViews[index];
+	stream.pInputSurface = m_inputViews[slot];
 
 	HRESULT hr = E_FAIL;
 	{
 		D3D11ImmediateContextGuard contextGuard(m_contextGate);
 		hr = m_videoContext->VideoProcessorBlt(
 			m_processor,
-			m_outputViews[index],
+			m_outputViews[slot],
 			0,
 			1,
 			&stream
@@ -226,7 +225,7 @@ bool D3D11VideoProcessorNV12::Convert(uint32_t index)
 	return SUCCEEDED(hr);
 }
 
-void D3D11VideoProcessorNV12::Destory()
+void D3D11VideoProcessorNV12::Destroy()
 {
 	// Video Processor 에서 사용된 리소스 해제
 
@@ -363,17 +362,17 @@ void D3D11VideoProcessorNV12::SaveNV12ToFile(ID3D11Texture2D* NV12Texture, const
 	SafeRelease(stagingTexture);
 }
 
-void D3D11VideoProcessorNV12::SaveNV12ToFile(uint32_t index, const char* fileName)
+void D3D11VideoProcessorNV12::SaveNV12ToFile(uint32_t slot, const char* fileName)
 {
 	// BGRA -> NV12 변환 이 잘 되었는지 스테이징 버퍼로 복사하여 파일로 Write 한다.
 
 	if (!m_outputViews)
 		return;
 
-	if (m_outputViewCount <= index)
+	if (m_outputViewCount <= slot)
 		return;
 
-	ID3D11VideoProcessorOutputView* outputView = m_outputViews[index];
+	ID3D11VideoProcessorOutputView* outputView = m_outputViews[slot];
 
 	if (!outputView)
 		return;

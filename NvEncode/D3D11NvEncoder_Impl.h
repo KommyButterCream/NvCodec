@@ -24,18 +24,19 @@ enum class NvEncPacketStatus : uint8_t
 	PacketReady,
 };
 
-struct NvEncInputFrame
+// ProcessOneOutput 의 결과.
+// NotReady  : 아직 완료되지 않음. 슬롯을 그대로 유지한다.
+// FrameLost : 프레임 1장을 버렸지만 슬롯은 회수했다. 파이프라인은 계속 돈다.
+// Fatal     : 슬롯을 안전하게 회수할 수 없다. 이미 faulted 상태로 진입해 있다.
+enum class NvEncOutputResult : uint8_t
 {
-	void* inputPtr = nullptr;
-	uint32_t chromaOffsets[2] = { 0, 0 };
-	uint32_t numChromaPlanes = 0;
-	uint32_t pitch = 0;
-	uint32_t chromaPitch = 0;
-	NV_ENC_BUFFER_FORMAT bufferFormat = NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_NV12;
-	NV_ENC_INPUT_RESOURCE_TYPE resourceType = NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+	Completed = 0,
+	NotReady,
+	FrameLost,
+	Fatal,
 };
 
-struct NvEncOutputFrame
+struct NvEncPacketBuffer
 {
 	uint8_t* streamData = nullptr;
 	uint32_t streamDataSize = 0;
@@ -45,7 +46,7 @@ struct NvEncOutputFrame
 	bool isKeyFrame = false;
 };
 
-struct NvEncInFlightFrame
+struct NvEncPendingFrame
 {
 	uint64_t frameId = 0;
 	volatile LONG submitted = FALSE;
@@ -57,6 +58,7 @@ friend class EncodeCompletionThread;
 
 public:
 	using EncodedPacketCallback = void (*)(const NvEncPacket& packet, void* userData);
+	using ErrorCallback = void (*)(NvEncErrorCode errorCode, void* userData);
 
 	D3D11NvEncoder_Impl() = default;
 	~D3D11NvEncoder_Impl();
@@ -74,6 +76,7 @@ public:
 	void Destroy();
 
 	void SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData);
+	void SetErrorCallback(ErrorCallback callback, void* userData);
 	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
 	void RequestKeyFrame();
 	bool CanSubmitFrame() const;
@@ -83,41 +86,60 @@ public:
 	bool IsAsyncPipelineEnabled() const;
 	bool DoEncode(NvEncPacket& encodeResultPacket);
 
+	bool IsFaulted() const;
+	void GetStats(NvEncStats& stats) const;
+	void DebugFailNextOutputs(uint32_t count);
+
 private:
+	// 게이트를 획득한 상태에서 호출된다. 내부에서 게이트를 다시 잡아서는 안 된다.
+	bool InitializeEncoderResources();
+
 	bool LoadNvEncApi();
 	bool OpenEncodeSession();
 
 	bool InitializeEncoder();
 	void DestroyEncoder();
 
+	// pending / all-slots-free 동기 이벤트.
+	// 완료 스레드와 수명을 분리해야 한다. 완료 스레드와 함께 만들고 지우면
+	// SubmitFrame(엔코드 스레드)과 WaitForPendingFrames(임의 스레드)가
+	// 이미 닫힌 핸들을 읽는 창이 생긴다.
+	bool InitializeSyncEvents();
+	void DestroySyncEvents();
+
 	bool InitializeAsyncEvent();
-	void DestoryAsyncEvent();
+	void DestroyAsyncEvent();
 
 	bool InitializeMappedInputBuffers();
-	void DestoryMappedInputBuffers();
+	void DestroyMappedInputBuffers();
 
 	bool InitializeBitstreamBuffers();
-	void DestoryBitstreamBuffers();
+	void DestroyBitstreamBuffers();
 
 	bool InitializeRegisteredResources();
 	void DestroyRegisteredResources();
 
 	bool InitializeD3D11InputBuffers();
-	void DestoryD3D11InputBuffers();
+	void DestroyD3D11InputBuffers();
 
 	bool InitializeBGRAtoNV12Converter();
 	void DestroyBGRAtoNV12Converter();
 
-	bool InitializeOutputFrameBuffers();
-	void DestroyOutputFrameBuffers();
-	void ReleaseOutputFrameBuffer(NvEncOutputFrame& frame);
-	bool InitializeInFlightFrames();
-	void DestroyInFlightFrames();
+	bool InitializePacketBuffers();
+	void DestroyPacketBuffers();
+	void ReleasePacketBuffer(NvEncPacketBuffer& frame);
+	bool InitializePendingFrames();
+	void DestroyPendingFrames();
 	bool InitializeEncodeCompletionThread();
 	void StopEncodeCompletionThread();
-	bool ProcessNextOutput(bool waitForCompletion, bool invokeCallback);
+	NvEncOutputResult ProcessOneOutput(bool block, bool invokeCallback, NvEncPacket* outPacket = nullptr);
+	void ClearPendingFrame(uint32_t slot);
+	void AbortPendingFrames();
+	void EnterFaultedState(NvEncErrorCode errorCode);
+	bool ConsumeDebugOutputFailure();
 	void SignalAllSlotsFree();
 	void InvokeEncodedPacketCallback(const NvEncPacket& packet);
+	void InvokeErrorCallback(NvEncErrorCode errorCode);
 
 	bool RegisterResource(void* buffer, NV_ENC_INPUT_RESOURCE_TYPE eResourceType,
 		uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT eBufferFormat, NV_ENC_BUFFER_USAGE eBufferUsage,
@@ -129,16 +151,15 @@ private:
 	bool SetNV12OutputTexture(ID3D11Texture2D** textures, uint32_t bufferCount);
 	bool SetBGRAInputTexture(ID3D11Texture2D** textures, uint32_t bufferCount);
 
-	const NvEncInputFrame* GetNextInputFrame();
-	uint32_t GetNextInputFrameIndex() const;
-	uint32_t GetNextOutputFrameIndex() const;
+	uint32_t GetInputSlotIndex() const;
+	uint32_t GetOutputSlotIndex() const;
 
-	bool MapInputResources(uint32_t index);
-	bool UnmapInputResources(uint32_t index);
+	bool MapInputResource(uint32_t slot);
+	bool UnmapInputResource(uint32_t slot);
 
-	bool EncodeFrame(uint32_t index);
-	NvEncPacketStatus WaitForCompletionEvent(uint32_t index, bool waitForCompletion);
-	bool GetEncodedPacket(uint32_t index, NvEncPacket& packet);
+	bool EncodePicture(uint32_t slot);
+	NvEncPacketStatus WaitForEncodeCompletion(uint32_t slot, bool block);
+	bool ReadEncodedBitstream(uint32_t slot, NvEncPacket& packet);
 	bool Flush();
 
 	int32_t GetCapabilityValue(GUID guidCodec, NV_ENC_CAPS capsToQuery);
@@ -148,7 +169,7 @@ private:
 	uint32_t GetMaxEncodeHeight() const;
 	NV_ENC_BUFFER_FORMAT GetPixelFormat() const;
 	DXGI_FORMAT GetD3D11Format(NV_ENC_BUFFER_FORMAT eBufferFormat) const;
-	HANDLE GetCompletionEvent(uint32_t index);
+	HANDLE GetCompletionEvent(uint32_t slot);
 
 private:
 	ID3D11Device* m_D3D11Device = nullptr;
@@ -163,15 +184,18 @@ private:
 	NV_ENC_INITIALIZE_PARAMS m_initParameters = {};
 	NV_ENC_CONFIG m_config = {};
 
-	HANDLE* m_completionEvent = nullptr;
+	HANDLE* m_slotCompletionEvents = nullptr;
 	HANDLE m_eosCompletionEvent = nullptr;
+
+	// Initialize 에서 만들고 Destroy 끝에서 닫는다. 엔코더 수명 전체에 걸쳐 유효.
 	HANDLE m_allSlotsFreeEvent = nullptr;
+	HANDLE m_frameSubmittedEvent = nullptr;
+
 	EncodeCompletionThread* m_encodeCompletionThread = nullptr;
 
 	uint32_t m_encodeBufferCount = 1;
-	NvEncInputFrame* m_inputFrames = nullptr;
-	NvEncOutputFrame* m_outputFrames = nullptr;
-	NvEncInFlightFrame* m_inFlightFrames = nullptr;
+	NvEncPacketBuffer* m_packetBuffers = nullptr;
+	NvEncPendingFrame* m_pendingFrames = nullptr;
 	NV_ENC_REGISTERED_PTR* m_registeredResources = nullptr;
 	NV_ENC_INPUT_PTR* m_mappedInputBuffers = nullptr;
 	NV_ENC_OUTPUT_PTR* m_bitstreamBuffers = nullptr;
@@ -180,14 +204,21 @@ private:
 	ID3D11Texture2D** m_nv12Textures = nullptr;
 
 	uint64_t m_timeStamp = 0;
-	uint32_t m_inputFrameIndex = 0;
-	uint32_t m_outputFrameIndex = 0;
+	uint32_t m_inputSequence = 0;
+	uint32_t m_outputSequence = 0;
 	volatile LONG m_pendingFrameCount = 0;
 	volatile LONG m_forceKeyFrame = FALSE;
 	volatile LONG m_acceptFrames = FALSE;
+	volatile LONG m_faulted = FALSE;
+	volatile LONG m_debugFailOutputCount = 0;
+	volatile LONG64 m_submittedFrameCount = 0;
+	volatile LONG64 m_completedFrameCount = 0;
+	volatile LONG64 m_lostFrameCount = 0;
 	bool m_asyncPipelineEnabled = true;
 	EncodedPacketCallback m_encodedPacketCallback = nullptr;
 	void* m_encodedPacketCallbackUserData = nullptr;
+	ErrorCallback m_errorCallback = nullptr;
+	void* m_errorCallbackUserData = nullptr;
 	SRWLOCK m_callbackLock = SRWLOCK_INIT;
 
 	uint32_t m_width = 0;

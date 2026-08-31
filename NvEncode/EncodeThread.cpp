@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "EncodeThread.h"
 
 #include <new>
@@ -47,5 +47,17 @@ void EncodeThread::SetKeyFrameRequestCallback(KeyFrameRequestCallback callback, 
 	if (m_impl)
 	{
 		m_impl->SetKeyFrameRequestCallback(callback, userData);
+	}
+}
+
+void EncodeThread::GetStats(Stats& stats) const
+{
+	if (m_impl)
+	{
+		m_impl->GetStats(stats);
+	}
+	else
+	{
+		stats = Stats();
 	}
 }

@@ -1,4 +1,4 @@
-#include "pch.h"
+ï»¿#include "pch.h"
 #include "DecodeFrameQueue.h"
 
 #include <malloc.h>
@@ -13,9 +13,9 @@ namespace
 
 	inline size_t WrapRingIndex(size_t index, size_t bufferCount)
 	{
-		// ¹öÆÛ ¼ö·®ÀÌ 2ÀÇ n ½ÂÀ» º¸ÀåÇÏ¹Ç·Î
-		// Bit And ¿¬»êÀ» ÅëÇØ Warp-Around.
-		// '%' ¿¬»êº¸´Ù ¼Óµµ°¡ ºü¸£´Ù.
+		// ë²„í¼ ìˆ˜ëŸ‰ì´ 2ì˜ n ìŠ¹ì„ ë³´ì¥í•˜ë¯€ë¡œ
+		// Bit And ì—°ì‚°ì„ í†µí•´ Warp-Around.
+		// '%' ì—°ì‚°ë³´ë‹¤ ì†ë„ê°€ ë¹ ë¥´ë‹¤.
 		return index & (bufferCount - 1);
 	}
 
@@ -26,7 +26,7 @@ namespace
 
 	inline size_t FindNextSlotWithState(const DecodeFrameQueue::SlotState* states, size_t bufferCount, size_t start, DecodeFrameQueue::SlotState state)
 	{
-		// Start Index ºÎÅÍ ½ÃÀÛÇÏ¿© ÀÔ·Â¹ŞÀº State ¿Í µ¿ÀÏÇÑ Slot Index ¸¦ ¹İÈ¯.
+		// Start Index ë¶€í„° ì‹œì‘í•˜ì—¬ ì…ë ¥ë°›ì€ State ì™€ ë™ì¼í•œ Slot Index ë¥¼ ë°˜í™˜.
 		for (size_t i = 0; i < bufferCount; ++i)
 		{
 			const size_t index = (start + i) & (bufferCount - 1);
@@ -48,20 +48,20 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 		return;
 	}
 
-	// ¹öÆÛ ¼ö·®ÀÌ 2 ÀÇ n ½ÂÀÏ °ÍÀÓÀ» º¸Àå ÇØ¾ß ÇÑ´Ù.
+	// ë²„í¼ ìˆ˜ëŸ‰ì´ 2 ì˜ n ìŠ¹ì¼ ê²ƒì„ì„ ë³´ì¥ í•´ì•¼ í•œë‹¤.
 	if (!IsPowerOfTwo(m_bufferCount))
 	{
 		assert(false && "bufferCount must be a power of two");
 		return;
 	}
 
-	// 64 ¹ÙÀÌÆ® ¾ó¶óÀÎ µÈ ¹öÆÛ 1°³ÀÇ Å©±â¸¦ °è»ê
+	// 64 ë°”ì´íŠ¸ ì–¼ë¼ì¸ ëœ ë²„í¼ 1ê°œì˜ í¬ê¸°ë¥¼ ê³„ì‚°
 	m_bufferSize = AlignUp(bufferSize, 64);
 
-	// ÇÊ¿ä·ÎµÇ´Â ÀüÃ¼ ¸Ş¸ğ¸® Å©±â¸¸Å­ ¼±ÇüÀû ¸Ş¸ğ¸®¸¦ ÇÒ´ç
+	// í•„ìš”ë¡œë˜ëŠ” ì „ì²´ ë©”ëª¨ë¦¬ í¬ê¸°ë§Œí¼ ì„ í˜•ì  ë©”ëª¨ë¦¬ë¥¼ í• ë‹¹
 	const size_t totalSize = m_bufferSize * m_bufferCount;
 
-	// µğÄÚµù Raw µ¥ÀÌÅÍ ÀúÀåÀ» À§ÇÑ 1D Linear ¹öÆÛ ÇÒ´ç
+	// ë””ì½”ë”© Raw ë°ì´í„° ì €ì¥ì„ ìœ„í•œ 1D Linear ë²„í¼ í• ë‹¹
 	m_buffers = static_cast<uint8_t*>(_aligned_malloc(totalSize, 64));
 	if (!m_buffers)
 	{
@@ -70,7 +70,7 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 		return;
 	}
 
-	// µğÄÚµù µ¥ÀÌÅÍ¸¦ ÀúÀåÇÒ ±¸Á¶Ã¼ ¹öÆÛ ÇÒ´ç
+	// ë””ì½”ë”© ë°ì´í„°ë¥¼ ì €ì¥í•  êµ¬ì¡°ì²´ ë²„í¼ í• ë‹¹
 	m_items = new DecodeFrameItem[m_bufferCount]();
 	if (!m_items)
 	{
@@ -81,7 +81,7 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 		return;
 	}
 
-	// µ¿ÀÏ ¼ö·®¸¸Å­ÀÇ Slot »óÅÂ ÀúÀåÇÏ´Â ¹öÆÛ ÇÒ´ç
+	// ë™ì¼ ìˆ˜ëŸ‰ë§Œí¼ì˜ Slot ìƒíƒœ ì €ì¥í•˜ëŠ” ë²„í¼ í• ë‹¹
 	m_states = new SlotState[m_bufferCount]();
 	if (!m_states)
 	{
@@ -94,7 +94,7 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 		return;
 	}
 
-	// ±âº»°ª ÃÊ±âÈ­
+	// ê¸°ë³¸ê°’ ì´ˆê¸°í™”
 	for (size_t i = 0; i < m_bufferCount; ++i)
 	{
 		m_items[i].data = m_buffers + (m_bufferSize * i);
@@ -132,32 +132,32 @@ DecodeFrameQueue::~DecodeFrameQueue()
 
 bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 {
-	// ÇÁ·¹ÀÓ ÇÚµéÀ» µğÄÚµå ÇÁ·¹ÀÓ Å¥ ¹öÆÛ¿¡ ÀúÀåÇÑ´Ù.
-	// µğÄÚµå ÇÁ·¹ÀÓ Å¥´Â °íÁ¤ Å©±â ¸µ ¹öÆÛ ÇüÅÂÀÌ´Ù.
+	// í”„ë ˆì„ í•¸ë“¤ì„ ë””ì½”ë“œ í”„ë ˆì„ í ë²„í¼ì— ì €ì¥í•œë‹¤.
+	// ë””ì½”ë“œ í”„ë ˆì„ íëŠ” ê³ ì • í¬ê¸° ë§ ë²„í¼ í˜•íƒœì´ë‹¤.
 	if (!m_items || !m_buffers || !m_states || (!frameHandle.data && frameHandle.size > 0) || frameHandle.size > m_bufferSize)
 	{
 		return false;
 	}
 
-	// DecodeFrameQueue »ç¿ë ÁßÀÌ ¾Æ´Ï¶ó¸é Á¾·á
+	// DecodeFrameQueue ì‚¬ìš© ì¤‘ì´ ì•„ë‹ˆë¼ë©´ ì¢…ë£Œ
 	if (::InterlockedCompareExchange(&m_running, TRUE, TRUE) == FALSE)
 	{
 		return false;
 	}
 
-	// m_items, m_states Á¢±ÙÀ» À§ÇÑ Lock
+	// m_items, m_states ì ‘ê·¼ì„ ìœ„í•œ Lock
 	::AcquireSRWLockExclusive(&m_lock);
 
 	const bool wasEmpty = (m_queuedCount == 0);
 	const bool hasHeldFrame = (::InterlockedCompareExchange(&m_hasHeldFrame, FALSE, FALSE) == TRUE);
 	const size_t occupiedCount = m_queuedCount + (hasHeldFrame ? 1 : 0);
 
-	// ÇÁ·¹ÀÓ ÇÚµéÀ» ÀúÀåÇÏ±â À§ÇÑ ºñ¾î ÀÖ´Â ½½·ÔÀ» Ã£´Â´Ù.
+	// í”„ë ˆì„ í•¸ë“¤ì„ ì €ì¥í•˜ê¸° ìœ„í•œ ë¹„ì–´ ìˆëŠ” ìŠ¬ë¡¯ì„ ì°¾ëŠ”ë‹¤.
 	if (occupiedCount >= m_bufferCount)
 	{
-		// ¸ğµç ½½·ÔÀÌ Queued µÇ¾î ÀÖ¾î¼­ »ç¿ëÇÒ °ø°£ÀÌ ¾ø´Â °æ¿ì
-		// Latest Read Pos ÀÇ µ¥ÀÌÅÍ¸¦ drop ÇÏ°í ÇØ´ç ½½·Ô¿¡
-		// µ¥ÀÌÅÍ¸¦ ÀúÀåÇÒ ¼ö ÀÖµµ·Ï ÇÑ´Ù.
+		// ëª¨ë“  ìŠ¬ë¡¯ì´ Queued ë˜ì–´ ìˆì–´ì„œ ì‚¬ìš©í•  ê³µê°„ì´ ì—†ëŠ” ê²½ìš°
+		// Latest Read Pos ì˜ ë°ì´í„°ë¥¼ drop í•˜ê³  í•´ë‹¹ ìŠ¬ë¡¯ì—
+		// ë°ì´í„°ë¥¼ ì €ì¥í•  ìˆ˜ ìˆë„ë¡ í•œë‹¤.
 		if (m_queuedCount == 0)
 		{
 			::ReleaseSRWLockExclusive(&m_lock);
@@ -178,7 +178,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	}
 	else
 	{
-		// »ç¿ë °¡´ÉÇÑ ½½·ÔÀÌ ÀÖ´Â °æ¿ì FREE »óÅÂÀÎ ½½·Ô ÀÎµ¦½º ¹İÈ¯
+		// ì‚¬ìš© ê°€ëŠ¥í•œ ìŠ¬ë¡¯ì´ ìˆëŠ” ê²½ìš° FREE ìƒíƒœì¸ ìŠ¬ë¡¯ ì¸ë±ìŠ¤ ë°˜í™˜
 		const size_t freeIndex = FindNextSlotWithState(m_states, m_bufferCount, m_writePos, SLOT_FREE);
 		if (freeIndex >= m_bufferCount)
 		{
@@ -189,9 +189,9 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 		m_writePos = freeIndex;
 	}
 
-	// µ¥ÀÌÅÍ ÀúÀåÀ» À§ÇÑ ½½·Ô ID °è»êÀÌ ³¡³µÀ¸¹Ç·Î (m_writePos)
-	// ÇØ´ç À§Ä¡¿¡ ÇÁ·¹ÀÓ µ¥ÀÌÅÍ¸¦ ÀúÀåÇÑ´Ù.
-	// ÀÌ¶§, Encode Raw Data ¸¦ ½½·Ô ¹öÆÛ·Î Deep-Copy º¹»çÇÏ¿© ÀúÀåÇÑ´Ù.
+	// ë°ì´í„° ì €ì¥ì„ ìœ„í•œ ìŠ¬ë¡¯ ID ê³„ì‚°ì´ ëë‚¬ìœ¼ë¯€ë¡œ (m_writePos)
+	// í•´ë‹¹ ìœ„ì¹˜ì— í”„ë ˆì„ ë°ì´í„°ë¥¼ ì €ì¥í•œë‹¤.
+	// ì´ë•Œ, Encode Raw Data ë¥¼ ìŠ¬ë¡¯ ë²„í¼ë¡œ Deep-Copy ë³µì‚¬í•˜ì—¬ ì €ì¥í•œë‹¤.
 	DecodeFrameItem& item = m_items[m_writePos];
 	item.size = frameHandle.size;
 	item.frameId = frameHandle.frameId;
@@ -202,22 +202,22 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 		memcpy(item.data, frameHandle.data, frameHandle.size);
 	}
 
-	// ÇØ´ç ½½·ÔÀÌ Queued µÇ¾îÀÖÀ½À» »óÅÂ ÀúÀå
+	// í•´ë‹¹ ìŠ¬ë¡¯ì´ Queued ë˜ì–´ìˆìŒì„ ìƒíƒœ ì €ì¥
 	m_states[m_writePos] = SLOT_QUEUED;
 	
-	// Ã³À½ ÀúÀåÇÏ´Â °æ¿ì¿¡´Â readpos == writepos ¸ÂÃçÁÖµµ·Ï ÇÑ´Ù.
+	// ì²˜ìŒ ì €ì¥í•˜ëŠ” ê²½ìš°ì—ëŠ” readpos == writepos ë§ì¶°ì£¼ë„ë¡ í•œë‹¤.
 	if (m_queuedCount == 0)
 	{
 		m_readPos = m_writePos;
 	}
 
-	// Queued Item ¼ö·®À» Áõ°¡½ÃÅ°°í
-	// ´ÙÀ½ Write Pos ¸¦ ¾÷µ¥ÀÌÆ® ÇÑ´Ù.
+	// Queued Item ìˆ˜ëŸ‰ì„ ì¦ê°€ì‹œí‚¤ê³ 
+	// ë‹¤ìŒ Write Pos ë¥¼ ì—…ë°ì´íŠ¸ í•œë‹¤.
 	++m_queuedCount;
 	m_writePos = WrapRingIndex(m_writePos + 1, m_bufferCount);
 
-	// µ¥ÀÌÅÍ Ã³¸® ÁßÀÌ ¾Æ´Ï¶ó¸é ½º·¹µå¸¦ ±ú¿ö ÀÛ¾÷À» ½ÃÅ°±â À§ÇØ
-	// Condition_Variable ¸¦ ±ú¿î´Ù.
+	// ë°ì´í„° ì²˜ë¦¬ ì¤‘ì´ ì•„ë‹ˆë¼ë©´ ìŠ¤ë ˆë“œë¥¼ ê¹¨ì›Œ ì‘ì—…ì„ ì‹œí‚¤ê¸° ìœ„í•´
+	// Condition_Variable ë¥¼ ê¹¨ìš´ë‹¤.
 	if (wasEmpty)
 	{
 		::WakeConditionVariable(&m_cv);
@@ -230,7 +230,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 
 DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 {
-	// µğÄÚµå ½º·¹µå Ãø¿¡¼­ µğÄÚµùÇÒ µ¥ÀÌÅÍ¸¦ È¹µæÇÏ´Â ÇÔ¼ö
+	// ë””ì½”ë“œ ìŠ¤ë ˆë“œ ì¸¡ì—ì„œ ë””ì½”ë”©í•  ë°ì´í„°ë¥¼ íšë“í•˜ëŠ” í•¨ìˆ˜
 
 	if (!m_items || !m_buffers || !m_states)
 	{
@@ -240,8 +240,8 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 	::AcquireSRWLockExclusive(&m_lock);
 	while (m_queuedCount == 0)
 	{
-		// Queued µÈ ÇÁ·¹ÀÓÀÌ ¾ø´Â °æ¿ì
-		// Lock À» ÇØÁ¦ÇÏ°í Sleep »óÅÂ·Î µé¾î°£´Ù.
+		// Queued ëœ í”„ë ˆì„ì´ ì—†ëŠ” ê²½ìš°
+		// Lock ì„ í•´ì œí•˜ê³  Sleep ìƒíƒœë¡œ ë“¤ì–´ê°„ë‹¤.
 		if (::InterlockedCompareExchange(&m_running, TRUE, TRUE) == FALSE)
 		{
 			::ReleaseSRWLockExclusive(&m_lock);
@@ -251,35 +251,35 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 		::SleepConditionVariableSRW(&m_cv, &m_lock, INFINITE, 0);
 	}
 
-	// EnqueueFrame ³»ºÎ¿¡¼­ WakeConditionVariable ·Î Sleep À» ±ú¿î °æ¿ì
-	// ÇöÀç Ã³¸® ÁßÀÎ ÇÁ·¹ÀÓÀÌ ÀÖ´Ù¸é Á¾·áÇÑ´Ù.
+	// EnqueueFrame ë‚´ë¶€ì—ì„œ WakeConditionVariable ë¡œ Sleep ì„ ê¹¨ìš´ ê²½ìš°
+	// í˜„ì¬ ì²˜ë¦¬ ì¤‘ì¸ í”„ë ˆì„ì´ ìˆë‹¤ë©´ ì¢…ë£Œí•œë‹¤.
 	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
 	{
 		::ReleaseSRWLockExclusive(&m_lock);
 		return nullptr;
 	}
 
-	// readPos ¿¡ À§Ä¡ÇÑ ÇÁ·¹ÀÓ µ¥ÀÌÅÍ¸¦ ¹İÈ¯ÇÑ´Ù.
+	// readPos ì— ìœ„ì¹˜í•œ í”„ë ˆì„ ë°ì´í„°ë¥¼ ë°˜í™˜í•œë‹¤.
 	const size_t heldIndex = m_readPos;
 	m_states[heldIndex] = SLOT_HELD;
 
-	// m_heldPos ¸¦ ¾÷µ¥ÀÌÆ® ÇÏ¿© ReleaseReadFrame ¿¡¼­ »ç¿ëÇÏµµ·Ï ÇÑ´Ù.
-	// ¿ÜºÎ¿¡ Buffer Index ¸¦ ¾Ë¸®Áö ¾Ê±â À§ÇÔ.
+	// m_heldPos ë¥¼ ì—…ë°ì´íŠ¸ í•˜ì—¬ ReleaseReadFrame ì—ì„œ ì‚¬ìš©í•˜ë„ë¡ í•œë‹¤.
+	// ì™¸ë¶€ì— Buffer Index ë¥¼ ì•Œë¦¬ì§€ ì•Šê¸° ìœ„í•¨.
 	m_heldPos = heldIndex;
 	::InterlockedExchange(&m_hasHeldFrame, TRUE);
 	--m_queuedCount;
 
-	// ´ÙÀ½ Read Pos °è»ê
+	// ë‹¤ìŒ Read Pos ê³„ì‚°
 	if (m_queuedCount > 0)
 	{
-		// Ã³¸®ÇØ¾ßÇÒ µ¥ÀÌÅÍ°¡ ³²¾Æ ÀÖ´Â °æ¿ì
-		// Queued µÇ¾î ÀÖ´Â Slot À» Ã£´Â´Ù.
+		// ì²˜ë¦¬í•´ì•¼í•  ë°ì´í„°ê°€ ë‚¨ì•„ ìˆëŠ” ê²½ìš°
+		// Queued ë˜ì–´ ìˆëŠ” Slot ì„ ì°¾ëŠ”ë‹¤.
 		m_readPos = FindNextSlotWithState(m_states, m_bufferCount, WrapRingIndex(heldIndex + 1, m_bufferCount), SLOT_QUEUED);
 	}
 	else
 	{
-		// Ã³¸®ÇØ¾ßÇÒ µ¥ÀÌÅÍ°¡ ¾ø´Â °æ¿ì
-		// ´Ü¼øÇÏ°Ô Read Pos ÀÎµ¦½º¸¸ Áõ°¡
+		// ì²˜ë¦¬í•´ì•¼í•  ë°ì´í„°ê°€ ì—†ëŠ” ê²½ìš°
+		// ë‹¨ìˆœí•˜ê²Œ Read Pos ì¸ë±ìŠ¤ë§Œ ì¦ê°€
 		m_readPos = WrapRingIndex(heldIndex + 1, m_bufferCount);
 	}
 
@@ -291,8 +291,8 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 
 void DecodeFrameQueue::ReleaseReadFrame()
 {
-	// AcquireReadFrame ·Î È¹µæÇÑ ÇÁ·¹ÀÓ µ¥ÀÌÅÍ¸¦ Release ÇÏ´Â ÇÔ¼ö
-	// AcquireReadFrame ¿¡¼­ ¼³Á¤ÇÑ m_heldPos À» »ç¿ëÇÑ´Ù.
+	// AcquireReadFrame ë¡œ íšë“í•œ í”„ë ˆì„ ë°ì´í„°ë¥¼ Release í•˜ëŠ” í•¨ìˆ˜
+	// AcquireReadFrame ì—ì„œ ì„¤ì •í•œ m_heldPos ì„ ì‚¬ìš©í•œë‹¤.
 
 	if (!m_items || !m_states)
 	{
@@ -301,8 +301,8 @@ void DecodeFrameQueue::ReleaseReadFrame()
 
 	::AcquireSRWLockExclusive(&m_lock);
 
-	// ½ÇÁ¦·Î ÇÁ·¹ÀÓÀ» Acquire Çß´ÂÁö Ã¼Å© ÈÄ
-	// ½½·Ô »óÅÂ¸¦ ÃÊ±âÈ­ ÇØÁØ´Ù.
+	// ì‹¤ì œë¡œ í”„ë ˆì„ì„ Acquire í–ˆëŠ”ì§€ ì²´í¬ í›„
+	// ìŠ¬ë¡¯ ìƒíƒœë¥¼ ì´ˆê¸°í™” í•´ì¤€ë‹¤.
 	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
 	{
 		m_states[m_heldPos] = SLOT_FREE;
@@ -318,7 +318,7 @@ void DecodeFrameQueue::ReleaseReadFrame()
 
 void DecodeFrameQueue::Shutdown()
 {
-	// Running State ¸¦ º¯°æ ÈÄ Sleep ÁßÀÎ ½º·¹µå¸¦ ±ú¿ö ½º·¹µå°¡ Á¤»ó Á¾·á µÇµµ·Ï ÇÔ
+	// Running State ë¥¼ ë³€ê²½ í›„ Sleep ì¤‘ì¸ ìŠ¤ë ˆë“œë¥¼ ê¹¨ì›Œ ìŠ¤ë ˆë“œê°€ ì •ìƒ ì¢…ë£Œ ë˜ë„ë¡ í•¨
 
 	::InterlockedExchange(&m_running, FALSE);
 

@@ -117,6 +117,9 @@
       <AdditionalLibraryDirectories>$(CudaToolkitLibDir);../Nvidia Video Codec SDK\Library;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>nvcuvid.lib;nvencodeapi.lib;cuda.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <CudaCompile>
+      <AdditionalCompilerOptions>/utf-8</AdditionalCompilerOptions>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -138,6 +141,9 @@
       <AdditionalLibraryDirectories>$(CudaToolkitLibDir);../Nvidia Video Codec SDK\Library;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>nvcuvid.lib;nvencodeapi.lib;cuda.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <CudaCompile>
+      <AdditionalCompilerOptions>/utf-8</AdditionalCompilerOptions>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\NvDecode\D3D11NvDecoder.cpp" />

@@ -1,4 +1,4 @@
-#include "ColorSpaceCuda.cuh"
+ï»¿#include "ColorSpaceCuda.cuh"
 #include <device_launch_parameters.h>
 
 // Utility
@@ -22,27 +22,27 @@ __global__ void NV12ToBGRAKernel(
 
     if (x >= width || y >= height) return;
 
-    // 1. Y °ª ÀĞ±â
+    // 1. Y ê°’ ì½ê¸°
     int32_t Y = yPlane[y * srcPitch + x];
 
-    // 2. UV °ª ÀĞ±â (NV12: ÀÎÅÍ¸®ºêµå)
-    int32_t uvIdx = (y >> 1) * srcPitch + (x & ~1); // x & ~1 Àº (x >> 1) * 2 ¿Í °°À½
+    // 2. UV ê°’ ì½ê¸° (NV12: ì¸í„°ë¦¬ë¸Œë“œ)
+    int32_t uvIdx = (y >> 1) * srcPitch + (x & ~1); // x & ~1 ì€ (x >> 1) * 2 ì™€ ê°™ìŒ
     int32_t U = (int32_t)uvPlane[uvIdx] - 128;
     int32_t V = (int32_t)uvPlane[uvIdx + 1] - 128;
 
-    // 3. BT.709 Full Range Á¤¹Ğ °è»ê
+    // 3. BT.709 Full Range ì •ë°€ ê³„ì‚°
     int32_t R = Y + ((403 * V + 128) >> 8);
     int32_t G = Y - ((48 * U + 120 * V + 128) >> 8);
     int32_t B = Y + ((475 * U + 128) >> 8);
 
-    // 4. °á°ú Á¶¸³ (BGRA ¼ø¼­ Ã¼Å©)
+    // 4. ê²°ê³¼ ì¡°ë¦½ (BGRA ìˆœì„œ ì²´í¬)
     uchar4 out;
     out.x = clampToByte(B); // Blue
     out.y = clampToByte(G); // Green
     out.z = clampToByte(R); // Red
     out.w = 255;
 
-    // 5. ¸Ş¸ğ¸® ¾²±â (Pitch ´ÜÀ§ ¾ÈÀü ¾²±â)
+    // 5. ë©”ëª¨ë¦¬ ì“°ê¸° (Pitch ë‹¨ìœ„ ì•ˆì „ ì“°ê¸°)
     uchar4* pDstLine = (uchar4*)((uint8_t*)dst + y * dstPitch);
     pDstLine[x] = out;
 }

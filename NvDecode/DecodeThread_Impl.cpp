@@ -1,4 +1,4 @@
-#include "pch.h"
+ï»¿#include "pch.h"
 #include "DecodeThread_Impl.h"
 
 #include "DecodeFrameQueue.h"
@@ -20,11 +20,11 @@ bool DecodeThread_Impl::Initialize(DecodeFrameQueue* queue, D3D11NvDecoder* deco
 
 	Shutdown();
 
-	// ¿ÜºÎ·ÎºÎÅÍ DecodeFrameQueue ¿Í NvDecoder ÀÔ·Â ¹× ¼³Á¤
+	// ì™¸ë¶€ë¡œë¶€í„° DecodeFrameQueue ì™€ NvDecoder ìž…ë ¥ ë° ì„¤ì •
 	m_decodeFrameQueue = queue;
 	m_decoder = decoder;
 
-	// µðÄÚµå ½º·¹µå ½ÃÀÛ
+	// ë””ì½”ë“œ ìŠ¤ë ˆë“œ ì‹œìž‘
 	if (!Start())
 	{
 		m_decodeFrameQueue = nullptr;
@@ -37,13 +37,13 @@ bool DecodeThread_Impl::Initialize(DecodeFrameQueue* queue, D3D11NvDecoder* deco
 
 void DecodeThread_Impl::Shutdown()
 {
-	// µðÄÚµù ÇÁ·¹ÀÓ Å¥ ºÎÅÍ Á¾·á ¾Ë¸²
+	// ë””ì½”ë”© í”„ë ˆìž„ í ë¶€í„° ì¢…ë£Œ ì•Œë¦¼
 	if (m_decodeFrameQueue)
 	{
 		m_decodeFrameQueue->Shutdown();
 	}
 
-	// ½º·¹µå Á¾·á
+	// ìŠ¤ë ˆë“œ ì¢…ë£Œ
 	Stop();
 
 	m_decodeFrameQueue = nullptr;
@@ -52,17 +52,17 @@ void DecodeThread_Impl::Shutdown()
 
 void DecodeThread_Impl::SetFrameCallback(FrameCallback callback, void* userData)
 {
-	// µðÄÚµùÀÌ ³¡³­ ÈÄ È£ÃâµÉ ÄÝ¹é ÇÔ¼ö ¼³Á¤
+	// ë””ì½”ë”©ì´ ëë‚œ í›„ í˜¸ì¶œë  ì½œë°± í•¨ìˆ˜ ì„¤ì •
 	m_frameCallback = callback;
 	m_frameCallbackUserData = userData;
 }
 
 void DecodeThread_Impl::Run()
 {
-	// ½º·¹µå
+	// ìŠ¤ë ˆë“œ
 	while (!IsStopRequested())
 	{
-		// µðÄÚµù ÇÁ·¹ÀÓ ¾ÆÀÌÅÛ ÇÏ³ª È¹µæ
+		// ë””ì½”ë”© í”„ë ˆìž„ ì•„ì´í…œ í•˜ë‚˜ íšë“
 		DecodeFrameQueue::DecodeFrameItem* frameItem = m_decodeFrameQueue->AcquireReadFrame();
 		if (!frameItem)
 		{
@@ -71,13 +71,13 @@ void DecodeThread_Impl::Run()
 
 		if (frameItem->size > 0)
 		{
-			// µðÄÚµù ¿äÃ»
+			// ë””ì½”ë”© ìš”ì²­
 			if (m_decoder->Parse(frameItem->data, static_cast<uint32_t>(frameItem->size)))
 			{
-				// µðÄÚµù °á°ú ÇÁ·¹ÀÓ µ¿±âÈ­ ÈÄ È¹µæ
+				// ë””ì½”ë”© ê²°ê³¼ í”„ë ˆìž„ ë™ê¸°í™” í›„ íšë“
 				while (D3D11NvDecoder::Frame* frame = m_decoder->GetFrame())
 				{
-					// ÄÝ¹é È£Ãâ
+					// ì½œë°± í˜¸ì¶œ
 					if (m_frameCallback)
 					{
 						m_frameCallback(*frame, m_frameCallbackUserData);
@@ -86,7 +86,7 @@ void DecodeThread_Impl::Run()
 			}
 		}
 
-		// µðÄÚµù ÇÁ·¹ÀÓ ¾ÆÀÌÅÛ ¹ÝÈ¯
+		// ë””ì½”ë”© í”„ë ˆìž„ ì•„ì´í…œ ë°˜í™˜
 		m_decodeFrameQueue->ReleaseReadFrame();
 	}
 }

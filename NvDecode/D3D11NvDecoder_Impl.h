@@ -120,8 +120,6 @@ private:
 	void NoteLostFrame(NvDecErrorCode errorCode);
 	void NoteHealthyFrame();
 
-	bool SaveFrameToBmp(uint32_t slot, const wchar_t* fileName);
-	bool SaveNV12ToRawFile(CUdeviceptr srcFrame, unsigned int srcPitch, const wchar_t* fileName);
 
 private:
 	ID3D11Device* m_D3D11Device = nullptr;

@@ -1156,10 +1156,14 @@ int32_t D3D11NvDecoder_Impl::ReconfigureDecoder(CUVIDEOFORMAT* videoFormat)
 	CUVIDRECONFIGUREDECODERINFO reconfigureParameters = {};
 	reconfigureParameters.ulWidth = m_videoFormatDesc.codedWidth;
 	reconfigureParameters.ulHeight = m_videoFormatDesc.codedHeight;
-	reconfigureParameters.display_area.left = videoFormat->display_area.left;
-	reconfigureParameters.display_area.top = videoFormat->display_area.top;
-	reconfigureParameters.display_area.right = videoFormat->display_area.right;
-	reconfigureParameters.display_area.bottom = videoFormat->display_area.bottom;
+	// SDK 안에서 타입이 어긋나 있다. CUVIDEOFORMAT::display_area 는 int 이고
+	// CUVIDRECONFIGUREDECODERINFO::display_area 는 short 다. 축소 변환을
+	// 명시해 둔다 — 표시 좌표가 32767 을 넘을 일은 없다(NVDEC 최대 해상도가
+	// 8192 급이다). 암묵 변환으로 두면 /W4 에서 매번 경고가 난다.
+	reconfigureParameters.display_area.left = static_cast<short>(videoFormat->display_area.left);
+	reconfigureParameters.display_area.top = static_cast<short>(videoFormat->display_area.top);
+	reconfigureParameters.display_area.right = static_cast<short>(videoFormat->display_area.right);
+	reconfigureParameters.display_area.bottom = static_cast<short>(videoFormat->display_area.bottom);
 	reconfigureParameters.ulTargetWidth = m_videoFormatDesc.codedWidth;
 	reconfigureParameters.ulTargetHeight = m_videoFormatDesc.codedHeight;
 	reconfigureParameters.ulNumDecodeSurfaces = m_videoFormatDesc.decodeSurfaceCount;
@@ -1391,157 +1395,4 @@ void D3D11NvDecoder_Impl::WaitForAllSlots()
 
 		CUDA_DRVAPI_CALL(cuEventSynchronize(m_decodeCompleteEvents[slot]));
 	}
-}
-
-bool D3D11NvDecoder_Impl::SaveFrameToBmp(uint32_t slot, const wchar_t* fileName)
-{
-	if (slot >= m_outputSlotCount || !m_outputTextures[slot])
-		return false;
-
-	// 진단용. 컨텍스트를 직접 만지므로 게이트가 필요하다.
-	D3D11ImmediateContextGuard contextGuard(m_contextGate);
-
-	ID3D11Texture2D* gpuTexture = m_outputTextures[slot];
-	D3D11_TEXTURE2D_DESC desc = {};
-	gpuTexture->GetDesc(&desc);
-
-	// 1. CPU에서 읽기 위한 Staging Texture 생성
-	desc.Usage = D3D11_USAGE_STAGING;
-	desc.BindFlags = 0;
-	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-	desc.MiscFlags = 0;
-
-	ID3D11Texture2D* stagingTexture = nullptr;
-	if (FAILED(m_D3D11Device->CreateTexture2D(&desc, nullptr, &stagingTexture)))
-		return false;
-
-	// 2. GPU -> Staging으로 데이터 복사
-	m_D3D11Context->CopyResource(stagingTexture, gpuTexture);
-
-	// 3. 데이터 Map
-	D3D11_MAPPED_SUBRESOURCE mapped = {};
-	if (FAILED(m_D3D11Context->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped)))
-	{
-		stagingTexture->Release();
-		return false;
-	}
-
-	FILE* fp = nullptr;
-	if (_wfopen_s(&fp, fileName, L"wb") != 0 || fp == nullptr)
-	{
-		m_D3D11Context->Unmap(stagingTexture, 0);
-		SafeRelease(stagingTexture);
-		return false;
-	}
-
-	// 4. BMP 파일 생성 (Header 작성)
-	BITMAPFILEHEADER bfh = {};
-	bfh.bfType = 0x4D42; // "BM"
-	bfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-	bfh.bfSize = bfh.bfOffBits + (desc.Width * desc.Height * 4);
-
-	BITMAPINFOHEADER bih = {};
-	bih.biSize = sizeof(BITMAPINFOHEADER);
-	bih.biWidth = desc.Width;
-	bih.biHeight = -(long)desc.Height; // Top-down
-	bih.biPlanes = 1;
-	bih.biBitCount = 32;
-	bih.biCompression = BI_RGB;
-
-	// Header 쓰기
-	fwrite(&bfh, sizeof(bfh), 1, fp);
-	fwrite(&bih, sizeof(bih), 1, fp);
-
-	// Row by row copy (Pitch 고려)
-	uint8_t* pSource = reinterpret_cast<uint8_t*>(mapped.pData);
-	for (uint32_t y = 0; y < desc.Height; ++y)
-	{
-		// 4바이트(RGBA) * 너비만큼 쓰기
-		fwrite(pSource + (y * mapped.RowPitch), desc.Width * 4, 1, fp);
-	}
-
-	fclose(fp);
-	m_D3D11Context->Unmap(stagingTexture, 0);
-	stagingTexture->Release();
-
-	return true;
-}
-
-
-bool D3D11NvDecoder_Impl::SaveNV12ToRawFile(CUdeviceptr srcFrame, unsigned int srcPitch, const wchar_t* fileName)
-{
-	uint32_t width = m_videoFormatDesc.lumaWidth;
-	uint32_t height = m_videoFormatDesc.lumaHeight;
-
-	// 1. CPU 임시 버퍼 할당 (Y: width*height, UV: width*height/2)
-	size_t size = width * height * 3 / 2;
-	uint8_t* cpuBuffer = new uint8_t[size];
-
-	if (!cpuBuffer)
-		return false;
-
-	// 2. Y Plane 복사 (Pitch 고려)
-	CUDA_MEMCPY2D copyY = {};
-	copyY.srcMemoryType = CU_MEMORYTYPE_DEVICE;
-	copyY.srcDevice = srcFrame;
-	copyY.srcPitch = srcPitch;
-	copyY.dstMemoryType = CU_MEMORYTYPE_HOST;
-	copyY.dstHost = cpuBuffer;
-	copyY.dstPitch = width;
-	copyY.WidthInBytes = width;
-	copyY.Height = height;
-
-	if (!CUDA_DRVAPI_CALL(cuMemcpy2D(&copyY)))
-	{
-		if (cpuBuffer)
-		{
-			delete[]cpuBuffer;
-			cpuBuffer = nullptr;
-		}
-		return false;
-	}
-
-	// 3. UV Plane 복사
-	CUDA_MEMCPY2D copyUV = {};
-	copyUV.srcMemoryType = CU_MEMORYTYPE_DEVICE;
-	copyUV.srcDevice = srcFrame + (srcPitch * height);
-	copyUV.srcPitch = srcPitch;
-	copyUV.dstMemoryType = CU_MEMORYTYPE_HOST;
-	copyUV.dstHost = cpuBuffer + (width * height);
-	copyUV.dstPitch = width;
-	copyUV.WidthInBytes = width;
-	copyUV.Height = height / 2;
-
-	if (!CUDA_DRVAPI_CALL(cuMemcpy2D(&copyUV)))
-	{
-		if (cpuBuffer)
-		{
-			delete[]cpuBuffer;
-			cpuBuffer = nullptr;
-		}
-		return false;
-	}
-
-	// 4. 파일 쓰기
-	FILE* fp = nullptr;
-	if (_wfopen_s(&fp, fileName, L"wb") != 0 || fp == nullptr)
-	{
-		if (cpuBuffer)
-		{
-			delete[]cpuBuffer;
-			cpuBuffer = nullptr;
-		}
-		return false;
-	}
-
-	size_t written = fwrite(cpuBuffer, 1, size, fp);
-	fclose(fp);
-
-	if (cpuBuffer)
-	{
-		delete[]cpuBuffer;
-		cpuBuffer = nullptr;
-	}
-
-	return (written == size);
 }

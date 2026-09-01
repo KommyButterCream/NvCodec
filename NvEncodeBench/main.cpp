@@ -5,6 +5,7 @@
 #include <string>
 
 #include "EncodeBench.h"
+#include "RoundTrip.h"
 #include "SelfTest.h"
 
 namespace
@@ -16,7 +17,8 @@ namespace
 			"\n"
 			"Usage:\n"
 			"  NvEncodeBench [bench] [options]   measure throughput and latency (default)\n"
-			"  NvEncodeBench selftest            run the encode pipeline regression cases\n"
+			"  NvEncodeBench selftest            run the encode/decode regression cases\n"
+			"  NvEncodeBench roundtrip [options]  encode -> decode round trip\n"
 			"\n"
 			"Options:\n"
 			"  --width N            frame width                       (default 1920)\n"
@@ -44,12 +46,22 @@ namespace
 			"  --csv PATH           write per-frame latency to a CSV file\n"
 			"  --help               show this message\n"
 			"\n"
+			"Round trip options (NvEncodeBench roundtrip ...):\n"
+			"  --width/--height/--frames/--fps/--buffers/--bitrate   as above\n"
+			"  --dec-slots N        decoder output slots, power of two >= 2 (default 8)\n"
+			"  --hold N             hold N decoded frames before releasing  (default 1)\n"
+			"  --leak               never release decoded frames (pool exhaustion)\n"
+			"  --contend-hz N       fake render thread takes the gate N times/sec\n"
+			"  --contend-us N       ...and holds it for N microseconds\n"
+			"\n"
 			"Examples:\n"
 			"  NvEncodeBench --width 1920 --height 1080 --fps 60 --frames 600\n"
 			"  NvEncodeBench --fps 0 --frames 1000            (encoder ceiling)\n"
 			"  NvEncodeBench --sync --fps 0 --frames 300      (latency floor, no thread hop)\n"
 			"  NvEncodeBench --csv before.csv                 (baseline for A/B comparison)\n"
-			"  NvEncodeBench selftest\n");
+			"  NvEncodeBench selftest\n"
+			"  NvEncodeBench roundtrip --frames 300              (encode -> decode loop)\n"
+			"  NvEncodeBench roundtrip --hold 12 --dec-slots 8   (pool exhaustion)\n");
 	}
 
 	bool ParseUInt32(const char* text, uint32_t& value)
@@ -99,6 +111,80 @@ int main(int argc, char** argv)
 		const char* mode = argv[argIndex];
 		if (::_stricmp(mode, "selftest") == 0)
 			return Bench::RunSelfTest();
+
+		if (::_stricmp(mode, "roundtrip") == 0)
+		{
+			Bench::RoundTripConfig roundTripConfig;
+
+			for (int i = argIndex + 1; i < argc; ++i)
+			{
+				const char* arg = argv[i];
+
+				if (::_stricmp(arg, "--width") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.width)) return 2;
+				}
+				else if (::_stricmp(arg, "--height") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.height)) return 2;
+				}
+				else if (::_stricmp(arg, "--frames") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.frameCount)) return 2;
+				}
+				else if (::_stricmp(arg, "--fps") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.targetFps)) return 2;
+				}
+				else if (::_stricmp(arg, "--buffers") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.encodeBufferCount)) return 2;
+				}
+				else if (::_stricmp(arg, "--dec-slots") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.decodeSlotCount)) return 2;
+				}
+				else if (::_stricmp(arg, "--bitrate") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.bitrateBps)) return 2;
+				}
+				else if (::_stricmp(arg, "--hold") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.holdFrameCount)) return 2;
+				}
+				else if (::_stricmp(arg, "--leak") == 0)
+				{
+					roundTripConfig.leakFrames = true;
+				}
+				else if (::_stricmp(arg, "--contend-hz") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.contendHz)) return 2;
+				}
+				else if (::_stricmp(arg, "--contend-us") == 0)
+				{
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.contendMicroseconds)) return 2;
+				}
+				else
+				{
+					printf_s("[ARG ERROR] Unknown roundtrip option: %s\n", arg);
+					return 2;
+				}
+			}
+
+			Bench::RoundTripBench roundTrip;
+			if (!roundTrip.Setup(roundTripConfig.width, roundTripConfig.height))
+			{
+				printf_s("[FATAL] Round trip setup failed.\n");
+				return 2;
+			}
+
+			Bench::RoundTripResult roundTripResult = {};
+			if (!roundTrip.Run(roundTripConfig, roundTripResult))
+				return 1;
+
+			Bench::PrintRoundTripResult(roundTripConfig, roundTripResult);
+			return roundTripResult.decoderFaulted ? 1 : 0;
+		}
 
 		if (::_stricmp(mode, "bench") != 0)
 		{

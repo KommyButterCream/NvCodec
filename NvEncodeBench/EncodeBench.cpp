@@ -1,4 +1,5 @@
 ﻿#include "EncodeBench.h"
+#include "GateContender.h"
 #include "SimpleContextGate.h"
 
 #include <d3d11.h>
@@ -134,117 +135,6 @@ namespace Bench
 			int64_t m_intervalTicks = 0;
 			int64_t m_nextDeadline = 0;
 			HANDLE m_timer = nullptr;
-		};
-
-		// 게이트를 주기적으로 점유하는 가짜 렌더 스레드.
-		// 실제 렌더러는 OMSetRenderTargets -> Draw -> Present 시퀀스를
-		// 게이트 안에서 수행하므로, 그 점유 패턴을 흉내낸다.
-		class GateContender
-		{
-		public:
-			GateContender(ID3D11ImmediateContextGate* gate, uint32_t hz, uint32_t holdMicroseconds)
-				: m_gate(gate)
-				, m_holdMicroseconds(holdMicroseconds)
-			{
-				if (!m_gate || hz == 0 || holdMicroseconds == 0)
-					return;
-
-				m_intervalTicks = static_cast<int64_t>(QpcTicksPerSecond() / static_cast<double>(hz));
-				m_stopEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
-				if (!m_stopEvent)
-					return;
-
-				m_thread = reinterpret_cast<HANDLE>(
-					::_beginthreadex(nullptr, 0, &GateContender::ThreadProc, this, 0, nullptr));
-			}
-
-			~GateContender()
-			{
-				if (m_stopEvent)
-					::SetEvent(m_stopEvent);
-
-				if (m_thread)
-				{
-					::WaitForSingleObject(m_thread, INFINITE);
-					::CloseHandle(m_thread);
-					m_thread = nullptr;
-				}
-
-				if (m_stopEvent)
-				{
-					::CloseHandle(m_stopEvent);
-					m_stopEvent = nullptr;
-				}
-			}
-
-			GateContender(const GateContender&) = delete;
-			GateContender& operator=(const GateContender&) = delete;
-
-			bool IsRunning() const { return m_thread != nullptr; }
-
-			uint64_t GetAcquireCount() const
-			{
-				return static_cast<uint64_t>(
-					::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_acquireCount), 0, 0));
-			}
-
-			// 게이트를 얻기까지 기다린 최대 시간. 엔코더가 게이트를 오래 잡으면 커진다.
-			double GetMaxWaitMs() const
-			{
-				const LONG64 ticks =
-					::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_maxWaitTicks), 0, 0);
-				return TicksToMilliseconds(ticks);
-			}
-
-		private:
-			static unsigned int __stdcall ThreadProc(void* arg)
-			{
-				static_cast<GateContender*>(arg)->Run();
-				return 0;
-			}
-
-			void Run()
-			{
-				::SetThreadDescription(::GetCurrentThread(), L"BenchGateContender");
-
-				int64_t nextDeadline = QpcNow();
-				while (::WaitForSingleObject(m_stopEvent, 0) != WAIT_OBJECT_0)
-				{
-					nextDeadline += m_intervalTicks;
-
-					const int64_t waitStart = QpcNow();
-					{
-						D3D11ImmediateContextGuard guard(m_gate);
-						const int64_t waited = QpcNow() - waitStart;
-						if (waited > ::InterlockedCompareExchange64(&m_maxWaitTicks, 0, 0))
-							::InterlockedExchange64(&m_maxWaitTicks, waited);
-
-						::InterlockedIncrement64(&m_acquireCount);
-						SpinForMicroseconds(m_holdMicroseconds);
-					}
-
-					const int64_t remaining = nextDeadline - QpcNow();
-					if (remaining > 0)
-					{
-						const DWORD sleepMs = static_cast<DWORD>(
-							TicksToMilliseconds(remaining));
-						::WaitForSingleObject(m_stopEvent, sleepMs);
-					}
-					else
-					{
-						nextDeadline = QpcNow();
-					}
-				}
-			}
-
-		private:
-			ID3D11ImmediateContextGate* m_gate = nullptr;
-			uint32_t m_holdMicroseconds = 0;
-			int64_t m_intervalTicks = 0;
-			HANDLE m_thread = nullptr;
-			HANDLE m_stopEvent = nullptr;
-			volatile LONG64 m_acquireCount = 0;
-			volatile LONG64 m_maxWaitTicks = 0;
 		};
 
 		bool WriteCsv(const std::string& path,

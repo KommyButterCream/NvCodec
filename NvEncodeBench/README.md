@@ -7,9 +7,13 @@ NVENC 엔코드 파이프라인의 회귀 테스트 + 성능 측정 하네스.
 ## 모드
 
 ```
-NvEncodeBench selftest      회귀 케이스 실행 (종료코드 0 = 전부 통과)
-NvEncodeBench [bench]       처리량 / 지연 측정 (기본 모드)
+NvEncodeBench selftest              회귀 케이스 실행 (종료코드 0 = 전부 통과)
+NvEncodeBench [bench]               처리량 / 지연 측정 (기본 모드)
+NvEncodeBench roundtrip [options]   엔코드 -> 디코드 왕복
 ```
+
+`roundtrip` 은 엔코더와 디코더를 **같은 D3D11 디바이스, 같은 게이트** 로 돌린다.
+실제 클라이언트가 렌더와 디코드를 한 즉시 컨텍스트에서 하는 구성과 같다.
 
 ## 회귀 케이스
 
@@ -28,6 +32,18 @@ NvEncodeBench [bench]       처리량 / 지연 측정 (기본 모드)
 | reconfig/1 | 인코딩 중 비트레이트 변경이 파이프라인을 멈추지 않고 반영된다. 12 -> 2 Mbps 에서 평균 패킷이 8.7 -> 1.4 KB, 유실 0 |
 | reconfig/2 | [init] 필드(해상도 / latencyMode / profile / GOP 구조) 변경은 거절되고, 거절 후에도 기존 설정이 부분 적용 없이 그대로 남는다 |
 | repeat | 같은 디바이스로 세션을 반복해 열고 닫아도 매번 전 프레임이 인코딩된다 |
+
+디코더 케이스는 `roundtrip` 하네스 위에서 돈다. 엔코더가 만든 실제 H.264
+비트스트림을 그대로 디코더에 먹이므로, 별도의 테스트용 스트림 파일이 필요 없다.
+
+| 케이스 | 검증 내용 |
+|---|---|
+| dec/roundtrip | 엔코딩된 패킷을 디코더가 한 장도 흘리지 않고 되돌려준다. 디코딩된 텍스처 크기가 인코딩 해상도와 같다 |
+| dec/timestamp | `Parse` 에 넘긴 timestamp 가 NVDEC 를 통과해 `Frame::timestamp` 로 돌아온다. 예전에는 `CUVID_PKT_TIMESTAMP` 플래그만 세우고 값을 넣지 않아 늘 0 이었다 |
+| dec/pool | 앱이 슬롯 수보다 많은 프레임을 붙잡으면, 붙잡힌 슬롯을 덮어쓰지 않고 버린다. `OutputPoolExhausted` 통지 후 유실이 이어지면 `DecoderFaulted` 로 멈춘다 |
+| dec/config | `outputSlotCount` 가 2의 n승이 아니거나 범위를 벗어나면 초기화 단계에서 거절된다 |
+| dec/gate | 게이트 경합(120 Hz x 3 ms) 아래에서도 재귀 획득 0, 유실 0. 지연만 늘고 프레임은 안 잃는다 |
+| dec/repeat | 디코드 세션을 반복해 열고 닫아도 매번 전 프레임이 전달된다 |
 
 출력 실패는 `D3D11NvEncoder::DebugFailNextOutputs()` 테스트 훅으로 주입한다.
 
@@ -66,6 +82,24 @@ NvEncodeBench [bench]       처리량 / 지연 측정 (기본 모드)
 
 지연은 **큐 투입 -> 앱 콜백 도착** 구간이다. 스트리밍에서 실제로 의미가 있는 값.
 
+### 왕복(roundtrip) 옵션
+
+```
+--width/--height/--frames/--fps/--buffers/--bitrate   위와 같다
+--dec-slots N            디코더 출력 슬롯, 2의 n승 >= 2      (기본 8)
+--hold N                 디코딩된 프레임을 N 장 붙잡았다가 반납 (기본 1)
+--leak                   반납을 아예 하지 않는다 (슬롯 고갈 경로)
+--contend-hz / --contend-us   게이트를 빼앗는 가짜 렌더 스레드
+```
+
+`--hold 1` 이면 `DecodeThread` 를 쓴다. 콜백이 반환하는 즉시 `ReleaseFrame` 을
+부르는, 가장 흔한 사용법이다. `--hold N` (N > 1) 이나 `--leak` 이면 하네스가
+직접 드레인하면서 프레임을 여러 장 붙잡는다. 앱이 텍스처를 렌더링에 쓰느라
+들고 있는 상황이고, 이쪽이 슬롯 고갈 경로를 밟는다.
+
+왕복 지연은 **엔코드 큐 투입 -> 디코드 콜백 도착** 구간이다. 이 값이 나오려면
+`Parse` 에 넘긴 timestamp 가 NVDEC 를 통과해 돌아와야 한다.
+
 ## 사용 예
 
 ```
@@ -74,6 +108,10 @@ NvEncodeBench --width 1920 --height 1080 --fps 60 --frames 600 --keyframe 60
 NvEncodeBench --fps 0 --frames 600                  (인코더 처리량 상한)
 NvEncodeBench --sync --fps 0 --frames 300           (스레드 홉 없는 지연 하한)
 NvEncodeBench --csv before.csv                      (개선 전 기준선 저장)
+NvEncodeBench roundtrip --frames 300                (엔코드 -> 디코드 왕복)
+NvEncodeBench roundtrip --fps 0 --frames 300        (왕복 처리량 상한)
+NvEncodeBench roundtrip --hold 12 --dec-slots 8     (출력 슬롯 고갈)
+NvEncodeBench roundtrip --contend-hz 120 --contend-us 4000   (게이트 경합)
 ```
 
 ## 기준선 (RTX 5080, Release 빌드, 1080p, 2026-08-31)
@@ -287,6 +325,48 @@ P3(VBV) / P4(튜닝) / P5(intra refresh) 를 하나씩 켜며 측정했다.
 Prepare / Convert / GetEncodedPacket(Lock+Unlock) / Map / Encode / Unmap.
 CPU 비용 자체는 프레임당 약 180 ns 로 무의미하지만, 렌더 스레드가 있으면
 획득 횟수만큼 대기 노출이 생긴다(4-2 참고).
+
+## 왕복 기준선 (RTX 5080, Release 빌드, 2026-09-01)
+
+엔코더와 디코더가 같은 D3D11 디바이스, 같은 게이트를 쓴다. 지연은
+**엔코드 큐 투입 -> 디코드 콜백 도착** 전 구간이다.
+
+| 조건 | 처리량 | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| 720p @60 | 300/300 | 2.01 | 2.46 | 2.68 | 26.3 |
+| 1080p @60 | 300/300 | 2.79 | 2.86 | 2.97 | 30.2 |
+| 1080p 무제한 | 579 fps | 7.39 | 7.60 | 16.7 | 31.5 |
+| 1080p @60 + 게이트 경합 120Hz x 4ms | 300/300 | 3.38 | 5.00 | 5.74 | 37.3 |
+
+단위 ms. `max` 는 전부 첫 IDR 이다. 두 번째로 큰 값은 p99 근처에 있다.
+
+관찰:
+
+- **1080p 60fps 왕복이 2.8 ms.** 프레임 간격(16.7 ms)의 1/6 이다. 엔코드
+  단독 지연(3.7 ms @ depth 4)보다 오히려 작은데, 그쪽은 파이프라인 깊이만큼
+  큐에서 기다린 시간이 포함된 값이기 때문이다. 디코드 자체는 1 ms 안쪽이다.
+- **포화 상태에서 지연이 2.8 -> 7.4 ms 로 커진다.** 엔코더 때와 같은 이유다.
+  처리량이 아니라 큐 대기 시간이 늘어난 것이고, Little's Law 그대로다.
+  이 구간에서는 디코드 큐가 8 장 정도를 버린다 (`decode queue dropped`).
+  엔코더가 디코더보다 빠르다는 뜻이고, latest-wins 큐가 설계대로 흘린 것이다.
+- **게이트 경합의 대가는 디코더가 치른다.** 가짜 렌더 스레드가 초당 120 회,
+  한 번에 4 ms 씩(듀티 48%) 게이트를 가져가도 렌더 쪽 최대 대기는 **0.002 ms**
+  다. 즉 엔코더도 디코더도 게이트를 짧게만 잡는다. 대신 왕복 p50 이
+  2.79 -> 3.38, p90 이 2.86 -> 5.00 으로 늘어난다. UI 를 막지 않고
+  코덱이 지연을 흡수하는 쪽이므로, 대화형 앱에는 이 방향이 맞다.
+- **유실 0.** 60fps 동작점에서는 어떤 조건에서도 `dropped pool/lag/disp` 가
+  전부 0 이었다.
+
+### 프레임 수명 계약
+
+`AcquireFrame()` 으로 받은 프레임은 `ReleaseFrame()` 을 부를 때까지 그 슬롯이
+재사용되지 않는다. 앱이 슬롯 수보다 많이 붙잡으면 디코더는 **붙잡힌 슬롯을
+덮어쓰지 않고** 새 프레임을 버린다. 앱이 보고 있는 텍스처가 밑에서 바뀌는 것보다
+프레임을 잃는 편이 낫기 때문이다.
+
+`--hold 12 --dec-slots 8` 로 재현한 결과: 8 장 전달 후 32 장 연속 유실,
+`OutputPoolExhausted` 통지, 이어서 `DecoderFaulted` 로 세션 종료. 조용히
+멈추지 않는다. 종료 시 붙잡고 있던 프레임은 전부 반납된다.
 
 ## 안정성 테스트 결과 (2026-08-31)
 

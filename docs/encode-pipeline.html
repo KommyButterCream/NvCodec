@@ -1,4 +1,4 @@
-﻿<title>NVENC Encode Pipeline</title>
+﻿<title>NvCodec Frame Round Trip</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
 
 <style>
@@ -158,6 +158,15 @@
   .lanechip.b { --chip: var(--lane-b); }
   .lanechip.c { --chip: var(--lane-c); }
   .lanechip.g { --chip: var(--gate); }
+
+  .partbreak {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    border-top: 2px solid var(--ink);
+    padding-top: 1.9rem;
+    margin-top: 1.4rem;
+  }
 
   /* ---------- sections ---------- */
 
@@ -340,11 +349,12 @@
 <div class="page">
 
   <header class="masthead">
-    <div class="eyebrow">NvCodec · NvEncode · async pipeline</div>
+    <div class="eyebrow">Part I · NvCodec · NvEncode · async pipeline</div>
     <h1>How a BGRA frame becomes an H.264 packet</h1>
     <p class="standfirst">
       Three threads, one ring of slots, six gate acquisitions per frame. This traces the
       asynchronous path end to end, then shows the single edge that changes in synchronous mode.
+      <strong>Part II</strong> 는 그 패킷이 다시 텍스처가 되는 경로다.
     </p>
     <div class="lanekey">
       <span class="lanechip a">Producer (capture)</span>
@@ -958,6 +968,397 @@
     </div>
   </section>
 
+  <!-- ============ PART II ============ -->
+  <div class="partbreak">
+    <div class="eyebrow">Part II · NvDecode · async pipeline</div>
+    <h1>How an H.264 packet becomes a BGRA texture</h1>
+    <p class="standfirst">
+      같은 슬롯 링, 같은 게이트, 같은 완료 이벤트 구조다. 다른 건 세 가지 —
+      NVDEC 는 push API 라 콜백이 호출 스레드에서 돌고, 완료 이벤트가 Win32 가 아니라 CUDA 이벤트이며,
+      프레임 수명이 콜백 반환이 아니라 <code>ReleaseFrame</code> 까지다.
+    </p>
+    <div class="lanekey">
+      <span class="lanechip b">DecodeThread</span>
+      <span class="lanechip c">CUDA stream (GPU)</span>
+      <span class="lanechip a">App (Acquire → render → Release)</span>
+      <span class="lanechip g">holds the context gate</span>
+    </div>
+  </div>
+
+  <!-- ============ 9. THE CONTRACT ============ -->
+  <section>
+    <div class="sechead"><span class="secnum">09</span><h2>링은 같고, 계약이 다르다</h2></div>
+
+    <p>
+      엔코더처럼 <code>m_writeSequence</code> / <code>m_readSequence</code> 두 단조 카운터가 링을 돈다.
+      슬롯은 <code>sequence &amp; (m_outputSlotCount - 1)</code> 로 얻고, 슬롯 하나가 텍스처 · CUDA 리소스 ·
+      스테이징 버퍼 · 완료 이벤트를 전부 색인한다.
+    </p>
+    <p>
+      다른 점은 <strong>세 번째 상태</strong>가 있다는 것이다. 엔코더 슬롯은 <em>비어 있거나 / NVENC 가 쓰는 중</em>
+      둘 뿐이지만, 디코더 슬롯에는 <em>앱이 들고 있는 중</em>이 추가된다. 디코딩 결과는 D3D11 텍스처라
+      앱이 그걸 화면에 그리는 동안 디코더가 덮어쓰면 안 되기 때문이다.
+    </p>
+
+    <figure>
+      <div class="figframe">
+        <svg viewBox="0 0 700 268" role="img" aria-label="A four-slot decoder ring. Slots 0 and 1 are held by the app, slots 2 and 3 hold ready frames. The write cursor wraps onto slot 0, finds it held, and the frame is dropped instead of overwriting it.">
+          <defs>
+            <marker id="dcur" viewBox="0 0 9 9" refX="8" refY="4.5" markerWidth="8" markerHeight="8" orient="auto">
+              <polygon points="0,1 9,4.5 0,8" fill="context-stroke"/>
+            </marker>
+          </defs>
+
+          <g>
+            <rect x="60"  y="104" width="104" height="58" rx="2" fill="var(--lane-a-wash)" stroke="var(--lane-a)" stroke-width="1.5"/>
+            <rect x="176" y="104" width="104" height="58" rx="2" fill="var(--lane-a-wash)" stroke="var(--lane-a)" stroke-width="1.5"/>
+            <rect x="292" y="104" width="104" height="58" rx="2" fill="var(--lane-c-wash)" stroke="var(--lane-c)" stroke-width="1.5"/>
+            <rect x="408" y="104" width="104" height="58" rx="2" fill="var(--lane-c-wash)" stroke="var(--lane-c)" stroke-width="1.5"/>
+
+            <g font-family="JetBrains Mono, monospace" font-size="11.5" text-anchor="middle">
+              <text x="112" y="128" fill="var(--lane-a)" font-weight="700">slot 0</text>
+              <text x="228" y="128" fill="var(--lane-a)" font-weight="700">slot 1</text>
+              <text x="344" y="128" fill="var(--lane-c)" font-weight="700">slot 2</text>
+              <text x="460" y="128" fill="var(--lane-c)" font-weight="700">slot 3</text>
+            </g>
+            <g font-family="Source Sans 3, sans-serif" font-size="10" text-anchor="middle" fill="var(--ink-soft)">
+              <text x="112" y="148">앱이 보유</text>
+              <text x="228" y="148">앱이 보유</text>
+              <text x="344" y="148">전달 대기</text>
+              <text x="460" y="148">전달 대기</text>
+            </g>
+
+            <line x1="512" y1="133" x2="556" y2="133" stroke="var(--rule)" stroke-width="1.5" stroke-dasharray="4 3"/>
+            <text x="562" y="137" font-family="JetBrains Mono, monospace" font-size="11" fill="var(--ink-faint)">wraps to 0</text>
+          </g>
+
+          <g stroke-width="1.75" fill="none">
+            <path d="M 344 86 L 344 98" stroke="var(--lane-a)" marker-end="url(#dcur)"/>
+            <path d="M 112 86 L 112 98" stroke="var(--lane-b)" marker-end="url(#dcur)"/>
+          </g>
+          <g font-family="JetBrains Mono, monospace" font-size="10.5">
+            <text x="344" y="76" text-anchor="middle" fill="var(--lane-a)">m_readSequence &amp; 3</text>
+            <text x="112" y="76" text-anchor="middle" fill="var(--lane-b)">m_writeSequence &amp; 3</text>
+          </g>
+          <g font-family="Source Sans 3, sans-serif" font-size="10" text-anchor="middle" fill="var(--ink-faint)">
+            <text x="344" y="60">AcquireFrame 이 꺼낼 자리</text>
+            <text x="112" y="60">OnPictureDisplay 가 쓸 자리</text>
+          </g>
+
+          <g>
+            <line x1="86" y1="110" x2="138" y2="156" stroke="var(--fault)" stroke-width="2"/>
+            <line x1="138" y1="110" x2="86" y2="156" stroke="var(--fault)" stroke-width="2"/>
+          </g>
+
+          <path d="M 112 174 L 112 190 L 300 190" stroke="var(--fault)" stroke-width="1.5" fill="none"/>
+          <rect x="300" y="179" width="264" height="22" rx="2" fill="var(--fault-wash)" stroke="var(--fault)" stroke-width="1"/>
+          <text x="432" y="194" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="700" fill="var(--fault)">IsSlotHeldByApp(0) → 프레임을 버린다</text>
+
+          <text x="350" y="230" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11.5" font-weight="700" fill="var(--ink)">덮어쓰지 않는다. 버린다.</text>
+          <text x="350" y="248" text-anchor="middle" font-family="Source Sans 3, sans-serif" font-size="10.5" fill="var(--ink-faint)">앱이 보고 있는 텍스처가 밑에서 바뀌는 것보다 프레임을 잃는 편이 낫다</text>
+          <text x="350" y="263" text-anchor="middle" font-family="Source Sans 3, sans-serif" font-size="10.5" fill="var(--ink-faint)">유실은 OutputPoolExhausted 로 통지된다</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>세 번째 상태가 규칙을 바꾼다.</b> 엔코더는 <code>pending &lt; N</code> 하나로 링이 안전했다.
+        디코더는 그게 안 된다 — 슬롯이 언제 풀리는지가 앱 손에 달려 있어서, 쓰기 직전에
+        <code>m_slotHeldByApp[slot]</code> 을 확인하는 수밖에 없다. 이 확인을 빼먹으면
+        앱이 렌더링 중인 텍스처를 디코더가 갈아엎는다. 예전 <code>GetFrame()</code> 은 내부 프레임을
+        단일 <code>m_publicFrame</code> 에 복사해 돌려줬고, 앱이 두 장을 들면 두 번째가 첫 번째를 덮어썼다.
+      </figcaption>
+    </figure>
+
+    <div class="note">
+      <b>슬롯 수는 2의 거듭제곱, 2 이상 32 이하.</b> 색인이 <code>&amp; (count - 1)</code> 이라 그렇다.
+      1 개는 특별히 막는다 — 앱이 한 장을 들고 있는 동안 쓸 슬롯이 없어져 전부 버려지기 때문이다.
+      기본값은 8 이고 <code>NvDecConfig::outputSlotCount</code> 로 바꾼다.
+    </div>
+  </section>
+
+  <!-- ============ 10. PUSH API ============ -->
+  <section>
+    <div class="sechead"><span class="secnum">10</span><h2>한 번 넣으면 콜백 셋이 그 자리에서 돈다</h2></div>
+
+    <p>
+      엔코더는 <code>SubmitFrame</code> 과 결과 수거가 서로 다른 스레드에 있다. 디코더는 그렇지 않다.
+      <code>cuvidParseVideoData</code> 는 push API 라, 패킷 하나를 넣으면 파서가
+      <strong>호출한 스레드에서</strong> 콜백을 전부 돌린 뒤에 리턴한다. NVENC 의
+      <code>enableEncodeAsync</code> 같은 플래그는 NVDEC 에 없다.
+    </p>
+
+    <div class="steps">
+      <div class="step b">
+        <div class="step-fn">DecodeThread::Run</div>
+        <div class="step-body">
+          큐에서 패킷을 하나 꺼내 <code>Parse(data, size, timestamp)</code> 를 부른다.
+          <em>timestamp 는 NVDEC 를 그대로 통과해</em> <code>Frame::timestamp</code> 로 돌아온다 —
+          앱이 디코딩 결과를 원본 프레임과 짝짓는 유일한 끈이다.
+        </div>
+      </div>
+      <div class="step b">
+        <div class="step-fn">OnVideoSequence</div>
+        <div class="step-body">
+          해상도나 코덱이 바뀌면 여기서 디코더를 재구성한다. 반환값이 곧 decode surface 수라
+          <code>bool</code> 로는 표현이 안 된다 — 0 은 실패, 1 은 기존 유지, 2 이상은 그 수만큼.
+        </div>
+      </div>
+      <div class="step b">
+        <div class="step-fn">OnPictureDecode<br>cuvidDecodePicture</div>
+        <div class="step-body">
+          디코드를 GPU 에 <em>비동기로 제출하고 즉시 리턴</em>한다. 여기서는 아무것도 기다리지 않는다.
+        </div>
+      </div>
+      <div class="step b">
+        <div class="step-fn">OnPictureDisplay<br>cuvidMapVideoFrame</div>
+        <div class="step-body">
+          <em>여기서 막힌다.</em> 해당 픽처의 디코드가 끝나야 매핑이 돌아온다.
+          NV12 표면을 손에 넣기 위한 불가피한 동기 지점이다.
+          <span class="gatetag">gate ×1</span>
+        </div>
+      </div>
+      <div class="step c">
+        <div class="step-fn">cuMemcpy2DAsync<br>cuEventRecord</div>
+        <div class="step-body">
+          NV12 → BGRA 변환과 D3D11 텍스처 복사를 <code>m_cuStream</code> 에 쌓고,
+          그 뒤에 완료 이벤트를 찍는다. <em>여기서도 기다리지 않는다</em> —
+          <code>cuStreamSynchronize</code> 는 주석 처리돼 있다.
+        </div>
+      </div>
+      <div class="step b">
+        <div class="step-fn">m_writeSequence++</div>
+        <div class="step-body">
+          <code>MemoryBarrier</code> 후 시퀀스를 올린다. 이 시점부터 슬롯은 소비 가능이지만,
+          GPU 작업은 아직 끝나지 않았을 수 있다.
+        </div>
+      </div>
+      <div class="step a">
+        <div class="step-fn">AcquireFrame<br>cuEventSynchronize</div>
+        <div class="step-body">
+          <em>미뤄둔 대기를 여기서 치른다.</em> 완료 이벤트를 기다린 뒤 슬롯을 앱 보유로 표시하고
+          프레임 포인터를 넘긴다.
+        </div>
+      </div>
+      <div class="step a">
+        <div class="step-fn">ReleaseFrame</div>
+        <div class="step-body">
+          앱이 다 쓰면 슬롯이 풀린다. <em>이걸 빼먹으면 그 슬롯은 영구히 묶인다.</em>
+          <code>DecodeThread</code> 를 쓰면 콜백 반환 직후 자동으로 불러준다.
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>디코드는 프레임당 게이트를 한 번만 잡는다.</b> 엔코더는 6 번이다 (1080p60 300프레임 실측:
+      엔코드 단독 1801회 = 6.0/프레임, 왕복 2110회 — 차이 309 ≈ 프레임당 1 + 슬롯 등록 8).
+      CUDA-D3D11 interop 으로 D3D11 리소스를 매핑하는 <code>OnPictureDisplay</code> 한 곳뿐이고,
+      <code>AcquireFrame</code> 은 게이트를 잡지 않는다.
+    </div>
+  </section>
+
+  <!-- ============ 11. WHERE THE WAIT IS ============ -->
+  <section>
+    <div class="sechead"><span class="secnum">11</span><h2>대기는 어디로 갔나</h2></div>
+
+    <p>
+      "디코더는 동기식인가?" 라는 질문의 답은 <strong>아니오</strong>다. 다만 async 를 켜는 스위치가
+      있는 게 아니라, GPU 작업이 원래 비동기이고 코드가 그걸 쓰고 있는 것이다.
+      구조를 나란히 놓으면 같은 모양이다.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>역할</th><th>NvEncode</th><th>NvDecode</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>비동기 제출</td><td><code>nvEncEncodePicture</code></td><td><code>cuvidDecodePicture</code></td></tr>
+          <tr><td>완료 신호</td><td>Win32 이벤트 (<code>enableEncodeAsync</code>)</td><td><code>cuEventRecord</code> — CUDA 이벤트</td></tr>
+          <tr><td>대기하는 곳</td><td><code>EncodeCompletionThread</code></td><td><code>AcquireFrame</code> 호출자</td></tr>
+          <tr><td>대기 수단</td><td><code>WaitForMultipleObjects</code></td><td><code>cuEventSynchronize</code></td></tr>
+          <tr><td>프레임 수명</td><td>콜백이 반환할 때까지</td><td><code>ReleaseFrame</code> 을 부를 때까지</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      결정적인 한 줄은 <code>OnPictureDisplay</code> 끝의 <code>cuStreamSynchronize</code> 가
+      <strong>주석 처리돼 있다는 것</strong>이다. 여기서 막았다면 DecodeThread 가 매 프레임
+      GPU 변환·복사가 끝날 때까지 놀았을 것이다. 대신 이벤트만 찍고 빠져나와,
+      대기를 실제로 프레임이 필요한 <code>AcquireFrame</code> 으로 미뤘다.
+    </p>
+
+    <figure>
+      <div class="figframe">
+        <svg viewBox="0 0 700 210" role="img" aria-label="A timeline showing the DecodeThread blocking inside cuvidMapVideoFrame while the GPU decodes picture N, then queueing the convert asynchronously and returning. Because the map wait sits on the parse thread, picture N+1 is not submitted until picture N has finished decoding, so NVDEC pipeline depth is one.">
+          <g font-family="JetBrains Mono, monospace" font-size="10" fill="var(--ink-faint)">
+            <text x="8" y="52">DecodeThread</text>
+            <text x="8" y="122">GPU / NVDEC</text>
+          </g>
+
+          <line x1="112" y1="66" x2="688" y2="66" stroke="var(--rule)" stroke-width="1"/>
+          <line x1="112" y1="136" x2="688" y2="136" stroke="var(--rule)" stroke-width="1"/>
+
+          <rect x="118" y="34" width="70" height="26" rx="2" fill="var(--lane-b-wash)" stroke="var(--lane-b)" stroke-width="1.5"/>
+          <text x="153" y="51" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9.5" fill="var(--lane-b)">decode N 제출</text>
+
+          <rect x="192" y="34" width="150" height="26" rx="2" fill="var(--gate-wash)" stroke="var(--gate)" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <text x="267" y="51" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="700" fill="var(--gate)">mapVideoFrame — 대기</text>
+
+          <rect x="346" y="34" width="94" height="26" rx="2" fill="var(--lane-c-wash)" stroke="var(--lane-c)" stroke-width="1.5"/>
+          <text x="393" y="51" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9.5" fill="var(--lane-c)">변환 큐잉</text>
+
+          <rect x="452" y="34" width="76" height="26" rx="2" fill="var(--lane-b-wash)" stroke="var(--lane-b)" stroke-width="1.5"/>
+          <text x="490" y="51" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9.5" fill="var(--lane-b)">decode N+1</text>
+
+          <rect x="192" y="104" width="150" height="26" rx="2" fill="var(--lane-c-wash)" stroke="var(--lane-c)" stroke-width="1.5"/>
+          <text x="267" y="121" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9.5" fill="var(--lane-c)">decode N 실행</text>
+
+          <rect x="346" y="104" width="94" height="26" rx="2" fill="var(--lane-c-wash)" stroke="var(--lane-c)" stroke-width="1.5" stroke-dasharray="3 2"/>
+          <text x="393" y="121" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9.5" fill="var(--lane-c)">변환 실행</text>
+
+          <rect x="452" y="104" width="76" height="26" rx="2" fill="var(--lane-c-wash)" stroke="var(--lane-c)" stroke-width="1.5"/>
+          <text x="490" y="121" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9.5" fill="var(--lane-c)">decode N+1</text>
+
+          <line x1="342" y1="24" x2="342" y2="146" stroke="var(--fault)" stroke-width="1" stroke-dasharray="3 3"/>
+
+          <path d="M 452 152 L 452 172 L 192 172 L 192 152" stroke="var(--fault)" stroke-width="1.5" fill="none"/>
+          <rect x="238" y="162" width="168" height="21" rx="2" fill="var(--fault-wash)" stroke="var(--fault)" stroke-width="1"/>
+          <text x="322" y="177" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="var(--fault)">두 픽처가 겹치지 않는다</text>
+
+          <text x="400" y="202" text-anchor="middle" font-family="Source Sans 3, sans-serif" font-size="10.5" fill="var(--ink-faint)">파스 스레드가 map 에서 막히므로 NVDEC 파이프라인 깊이는 1 이다</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>깊이 1 — 그런데 대가를 안 치른다.</b> <code>cuvidMapVideoFrame</code> 이 파스 스레드를 막으니까
+        <code>Parse(N)</code> 이 리턴할 때 decode N 은 이미 끝나 있고, decode N+1 은 그 뒤에야 제출된다.
+        엔코더가 깊이 4 로 도는 것과 대조적이다. 다음 절의 측정은 이게 실제로는 손해가 아니라고 말한다.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 12. POOL EXHAUSTION ============ -->
+  <section>
+    <div class="sechead"><span class="secnum">12</span><h2>앱이 너무 많이 들고 있으면</h2></div>
+
+    <p>
+      슬롯보다 많은 프레임을 붙잡으면 디코더는 쓸 자리가 없다. 이때 아무 슬롯에나 덮어쓰면
+      앱이 렌더링 중인 텍스처가 찢어진다. 그래서 버린다 — 그리고 계속 버려지면
+      조용히 멈추는 대신 <strong>큰 소리로 죽는다</strong>.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>상황</th><th>코드</th><th>동작</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>쓸 슬롯을 앱이 보유 중</td>
+            <td><code>OutputPoolExhausted</code></td>
+            <td>프레임 폐기 + 오류 콜백. 파이프라인은 계속 돈다</td>
+          </tr>
+          <tr>
+            <td>앞선 프레임을 앱이 안 가져감</td>
+            <td><code>OutputNotConsumed</code></td>
+            <td>가장 오래된 것부터 건너뛴다 (latest wins)</td>
+          </tr>
+          <tr>
+            <td>매핑 · 복사 실패</td>
+            <td><code>DisplayFailed</code></td>
+            <td>해당 프레임만 버리고 자원 회수</td>
+          </tr>
+          <tr>
+            <td>유실 32회 연속</td>
+            <td><code>DecoderFaulted</code></td>
+            <td><strong>세션 종료.</strong> 이후 <code>Parse</code> 는 즉시 실패한다</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      임계값은 <code>NvDecConfig::maxConsecutiveLostFrames</code> (기본 32) 다.
+      <code>--hold 12 --dec-slots 8</code> 로 재현한 실측: 8 장 전달 → 32 장 연속 유실 →
+      <code>OutputPoolExhausted</code> 32회 → <code>DecoderFaulted</code> 1회. 종료 시점에
+      앱이 붙잡고 있던 프레임은 전부 반납되어 <code>framesHeldByApp</code> 이 0 으로 떨어진다.
+    </p>
+
+    <div class="note">
+      <b>fault 는 복구되지 않는다.</b> <code>IsFaulted()</code> 가 <code>true</code> 가 되면
+      <code>Destroy</code> 후 재초기화하는 수밖에 없다. 프레임 반납을 빼먹는 건 앱의 버그이고,
+      버그를 조용히 흡수하는 것보다 즉시 드러내는 편이 낫다는 판단이다.
+    </div>
+  </section>
+
+  <!-- ============ 13. MEASURED ============ -->
+  <section>
+    <div class="sechead"><span class="secnum">13</span><h2>실측 — 깊이 1 이 손해가 아닌 이유</h2></div>
+
+    <p>
+      엔코더와 디코더를 <strong>같은 D3D11 디바이스, 같은 게이트</strong>로 돌린
+      <code>NvEncodeBench.exe roundtrip</code> 결과다. 지연은 엔코드 큐 투입 → 디코드 콜백 도착 전 구간이다.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>조건</th><th>p50</th><th>p90</th><th>p99</th><th>유실</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>720p @60</td><td class="num">2.01 ms</td><td class="num">2.46</td><td class="num">2.68</td><td class="num">0</td></tr>
+          <tr><td><strong>1080p @60</strong></td><td class="num"><strong>2.79 ms</strong></td><td class="num">2.86</td><td class="num">2.97</td><td class="num">0</td></tr>
+          <tr><td>1080p 무제한</td><td class="num">7.39 ms</td><td class="num">7.60</td><td class="num">16.7</td><td class="num">큐 8장</td></tr>
+          <tr><td>1080p @60 + 게이트 경합 120Hz × 4ms</td><td class="num">3.38 ms</td><td class="num">5.00</td><td class="num">5.74</td><td class="num">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>디코더는 병목이 아니다</h3>
+
+    <p>
+      깊이 1 이라면 처리량에서 손해를 봐야 한다. 재보니 아니었다 — 모든 해상도에서
+      디코더가 엔코더 속도의 95~97% 를 따라간다. H.264 디코드가 엔코드보다 원래 훨씬 싸서,
+      깊이 1 로도 남아돈다.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>해상도</th><th>엔코드 단독</th><th>왕복 디코드</th><th>비율</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1080p</td><td class="num">575 fps</td><td class="num">559 fps</td><td class="num">97%</td></tr>
+          <tr><td>720p</td><td class="num">1094 fps</td><td class="num">1038 fps</td><td class="num">95%</td></tr>
+          <tr><td>480p</td><td class="num">1663 fps</td><td class="num">1609 fps</td><td class="num">97%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      출력 슬롯을 2 → 16 으로 늘려도 1080p 무제한 wall time 이
+      0.523 / 0.515 / 0.524 / 0.522 초로 <strong>완전히 평평하다</strong>.
+      슬롯은 출력 버퍼링일 뿐 디코드 병렬성이 아니라는 확인이다.
+    </p>
+
+    <div class="note">
+      <b>게이트 경합의 대가는 코덱이 치른다.</b> 가짜 렌더 스레드가 초당 120회, 한 번에 4 ms 씩
+      (듀티 48%) 게이트를 가져가도 <strong>렌더 쪽 최대 대기는 0.002 ms</strong> 다.
+      엔코더도 디코더도 게이트를 짧게만 잡는다는 뜻이다. 대신 왕복 p50 이 2.79 → 3.38,
+      p90 이 2.86 → 5.00 으로 늘어난다. UI 를 막지 않고 코덱이 지연을 흡수하는 쪽이므로
+      대화형 앱에는 이 방향이 맞다.
+    </div>
+
+    <h3>언제 다시 봐야 하나</h3>
+
+    <p>
+      display 스레드를 분리해 깊이를 늘리는 건 지금 이득이 0 이라 하지 않았다.
+      다음 조건에서는 다시 판단해야 한다 — <strong>다중 스트림 동시 디코딩</strong>(깊이 1 이 세션 수만큼 누적),
+      <strong>4K 이상</strong>(디코드 비용이 엔코드에 근접), <strong>디코드 후 무거운 후처리 추가</strong>.
+      신호는 간단하다. <code>--dec-slots</code> 스윕이 평평하지 않아지면 그때다.
+    </p>
+  </section>
+
+
   <footer>
     <div>
       <code>Module/NvCodec/NvEncode/</code> — <code>D3D11NvEncoder_Impl.cpp</code>,
@@ -968,7 +1369,14 @@
       Regression coverage and measured baselines: <code>Module/NvCodec/NvEncodeBench/README.md</code>
       · run <code>NvEncodeBench.exe selftest</code>
     </div>
-    <div>Reflects <code>67845b1</code> on <code>main</code>.</div>
+    <div>
+      <code>Module/NvCodec/NvDecode/</code> — <code>D3D11NvDecoder_Impl.cpp</code>,
+      <code>DecodeThread_Impl.cpp</code>, <code>DecodeFrameQueue.cpp</code>, <code>NvDecConfig.h</code>
+    </div>
+    <div>
+      Round trip harness: <code>NvEncodeBench.exe roundtrip</code> ·
+      measured on RTX 5080, Release, 2026-09-01.
+    </div>
   </footer>
 
 </div>

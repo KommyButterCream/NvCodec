@@ -3,7 +3,9 @@
 #include <stdio.h>
 
 #include "EncodeBench.h"
+#include "RoundTrip.h"
 #include "SimpleContextGate.h"
+#include "../NvDecode/D3D11NvDecoder.h"
 #include "../NvEncode/D3D11NvEncoder.h"
 #include "../NvEncode/EncodeFrameQueue.h"
 
@@ -514,11 +516,224 @@ namespace Bench
 			EndCase(ok);
 			return ok;
 		}
+
+		// ---------- 디코더 ----------
+
+		// 왕복이 성립하는지부터 본다. 엔코더가 만든 비트스트림을 디코더가
+		// 한 장도 흘리지 않고 되돌려줘야 한다. 이게 깨지면 아래 케이스들은
+		// 전부 의미가 없다.
+		bool TestRoundTripDeliversEveryFrame(RoundTripBench& roundTrip)
+		{
+			BeginCase("round trip delivers every encoded frame");
+
+			RoundTripConfig config;
+			config.frameCount = 120;
+			config.targetFps = 60;
+
+			RoundTripResult result = {};
+			bool ok = Check(roundTrip.Run(config, result), "Run() succeeded");
+
+			ok &= Check(result.encodedPackets == config.frameCount,
+				"encoder produced one packet per frame");
+			ok &= Check(result.decoderStats.parsedPackets == result.encodedPackets,
+				"decoder parsed every packet");
+			ok &= Check(result.decoderStats.deliveredFrames == result.encodedPackets,
+				"decoder delivered every frame");
+			ok &= Check(result.decoderStats.droppedPoolExhausted == 0
+				&& result.decoderStats.droppedNotConsumed == 0
+				&& result.decoderStats.droppedDisplayFailed == 0,
+				"nothing dropped");
+			ok &= Check(!result.decoderFaulted && !result.encoderFaulted, "neither side faulted");
+			ok &= Check(result.decodedWidth == config.width && result.decodedHeight == config.height,
+				"decoded texture matches the encoded resolution");
+
+			EndCase(ok);
+			return ok;
+		}
+
+		// timestamp 는 앱이 디코딩 결과를 원본 프레임과 짝짓는 유일한 끈이다.
+		// 예전에는 CUVID_PKT_TIMESTAMP 플래그만 세우고 값을 넣지 않아 늘 0 이었고,
+		// 그래서 왕복 지연 측정이 통째로 엉터리 값을 냈다.
+		// 지연 샘플이 프레임 수만큼 잡혔다는 것은 timestamp 가 살아 돌아왔다는 뜻이다.
+		bool TestTimestampSurvivesTheRoundTrip(RoundTripBench& roundTrip)
+		{
+			BeginCase("timestamp survives encode -> decode");
+
+			RoundTripConfig config;
+			config.frameCount = 120;
+			config.targetFps = 60;
+
+			RoundTripResult result = {};
+			bool ok = Check(roundTrip.Run(config, result), "Run() succeeded");
+
+			// 지연 샘플은 디코딩된 프레임의 timestamp 가 투입 기록과 맞을 때만 쌓인다.
+			ok &= Check(result.latency.sampleCount == result.decodedFrames,
+				"every decoded frame matched its encode-submit record");
+			ok &= Check(result.latency.sampleCount > 0, "at least one sample");
+
+			// 720p60 왕복이 한 프레임 간격(16.7ms)을 넘으면 저지연이라 할 수 없다.
+			// 값이 0 에 붙어도 이상하다. timestamp 가 다시 죽었다는 뜻이다.
+			ok &= Check(result.latency.p50Ms > 0.05 && result.latency.p50Ms < 16.7,
+				"p50 round-trip latency is inside one frame interval");
+
+			EndCase(ok);
+			return ok;
+		}
+
+		// 앱이 슬롯 수보다 많은 프레임을 붙잡으면 디코더는 새 프레임을 쓸 곳이 없다.
+		// 이때 아무 슬롯에나 덮어쓰면 앱이 보고 있는 텍스처가 찢어진다.
+		// 덮어쓰는 대신 버리고, 계속 버려지면 조용히 멈추지 말고 fault 를 내야 한다.
+		bool TestPoolExhaustionDropsInsteadOfCorrupting(RoundTripBench& roundTrip)
+		{
+			BeginCase("pool exhaustion drops frames instead of overwriting held ones");
+
+			RoundTripConfig config;
+			config.frameCount = 200;
+			config.targetFps = 60;
+			config.decodeSlotCount = 8;
+			config.holdFrameCount = 12;   // 슬롯보다 많이 붙잡는다
+
+			RoundTripResult result = {};
+			bool ok = Check(roundTrip.Run(config, result), "Run() succeeded");
+
+			ok &= Check(result.decoderStats.deliveredFrames <= config.decodeSlotCount,
+				"delivered no more frames than there are slots");
+			ok &= Check(result.decoderStats.droppedPoolExhausted > 0,
+				"reported the exhaustion instead of overwriting");
+			ok &= Check(result.decoderErrorCounts[
+				static_cast<size_t>(NvDecErrorCode::OutputPoolExhausted)] > 0,
+				"raised OutputPoolExhausted through the error callback");
+			ok &= Check(result.decoderFaulted, "faulted after the loss ran on");
+
+			// 붙잡고 있던 프레임은 종료 시 전부 반납되어야 한다.
+			// 남아 있으면 Destroy 가 슬롯을 정리하지 못한다.
+			ok &= Check(result.decoderStats.framesHeldByApp == 0,
+				"every held frame was returned before teardown");
+
+			EndCase(ok);
+			return ok;
+		}
+
+		// 슬롯 수는 2 의 거듭제곱이어야 한다. 슬롯 색인이 & (count - 1) 이기 때문이다.
+		// 1 개면 앱이 한 장 들고 있는 동안 쓸 슬롯이 없어 전부 버려진다.
+		bool TestDecoderRejectsInvalidSlotCounts(RoundTripBench& roundTrip)
+		{
+			BeginCase("decoder rejects invalid output slot counts");
+
+			ID3D11Device* device = roundTrip.GetDevice();
+			bool ok = Check(device != nullptr, "device available");
+			if (!ok)
+			{
+				EndCase(false);
+				return false;
+			}
+
+			SimpleContextGate gate;
+
+			const uint32_t badCounts[] = { 0U, 1U, 3U, 6U, 64U };
+			for (uint32_t badCount : badCounts)
+			{
+				NvDecConfig config;
+				config.outputSlotCount = badCount;
+
+				D3D11NvDecoder decoder;
+				const bool initialized = decoder.Initialize(device, config, &gate);
+				decoder.Destroy();
+
+				char label[128] = {};
+				::sprintf_s(label, "outputSlotCount %u rejected", badCount);
+				ok &= Check(!initialized, label);
+			}
+
+			// 정상값은 통과해야 한다. 위 검사가 무조건 false 를 내는 게 아님을 확인한다.
+			NvDecConfig goodConfig;
+			goodConfig.outputSlotCount = 8;
+
+			D3D11NvDecoder decoder;
+			const bool initialized = decoder.Initialize(device, goodConfig, &gate);
+			ok &= Check(initialized, "outputSlotCount 8 accepted");
+			decoder.Destroy();
+
+			EndCase(ok);
+			return ok;
+		}
+
+		// 게이트는 재귀 획득을 허용하지 않는다. 이미 잡은 스레드가 다시 잡으면
+		// 실제 SRWLOCK 게이트에서는 그 자리에서 데드락한다.
+		// 하네스 게이트는 죽는 대신 세어 두므로, 그 수가 0 이어야 한다.
+		bool TestDecoderNeverReentersTheGate(RoundTripBench& roundTrip)
+		{
+			BeginCase("decoder never re-enters the context gate");
+
+			RoundTripConfig config;
+			config.frameCount = 150;
+			config.targetFps = 60;
+
+			// 렌더 스레드가 게이트를 계속 빼앗는 상황까지 겹친다.
+			config.contendHz = 120;
+			config.contendMicroseconds = 3000;
+
+			RoundTripResult result = {};
+			bool ok = Check(roundTrip.Run(config, result), "Run() succeeded");
+
+			ok &= Check(result.gateEnterCount > 0, "the gate was actually used");
+			ok &= Check(result.gateRecursiveEnterCount == 0,
+				"no recursive acquisition (would deadlock a real gate)");
+			ok &= Check(result.contendAcquireCount > 0, "the fake render thread ran");
+			ok &= Check(!result.decoderFaulted && !result.encoderFaulted,
+				"both sides survived the contention");
+			ok &= Check(result.decoderStats.deliveredFrames == result.encodedPackets,
+				"contention cost latency but not frames");
+
+			EndCase(ok);
+			return ok;
+		}
+
+		// 엔코더와 마찬가지로, 디코더도 세션을 반복해서 열고 닫을 수 있어야 한다.
+		// Destroy 가 슬롯이나 CUDA 자원을 흘리면 두 번째 라운드부터 무너진다.
+		bool TestRepeatedDecodeSessions(RoundTripBench& roundTrip)
+		{
+			BeginCase("repeated decode sessions stay clean");
+
+			bool ok = true;
+			for (uint32_t round = 0; round < 3; ++round)
+			{
+				RoundTripConfig config;
+				config.frameCount = 60;
+
+				// fps 0 (무제한) 으로 돌리면 latest-wins 큐가 거의 다 버려서
+				// 라운드당 1 장만 인코딩된다. 그러면 "1 of 1" 로 통과해 버려
+				// 검사가 사실상 아무것도 확인하지 못한다. 실제로 흘려보낸다.
+				config.targetFps = 120;
+
+				RoundTripResult result = {};
+				char label[160] = {};
+
+				::sprintf_s(label, "round %u: Run() succeeded", round);
+				ok &= Check(roundTrip.Run(config, result), label);
+
+				::sprintf_s(label, "round %u: encoded %llu of %u frames (test is not vacuous)",
+					round, static_cast<unsigned long long>(result.encodedPackets), config.frameCount);
+				ok &= Check(result.encodedPackets >= config.frameCount / 2U, label);
+
+				::sprintf_s(label, "round %u: delivered %llu of %llu",
+					round,
+					static_cast<unsigned long long>(result.decoderStats.deliveredFrames),
+					static_cast<unsigned long long>(result.encodedPackets));
+				ok &= Check(result.decoderStats.deliveredFrames == result.encodedPackets, label);
+
+				::sprintf_s(label, "round %u: no fault, nothing held", round);
+				ok &= Check(!result.decoderFaulted && result.decoderStats.framesHeldByApp == 0, label);
+			}
+
+			EndCase(ok);
+			return ok;
+		}
 	}
 
 	int RunSelfTest()
 	{
-		printf_s("NvEncode self test\n");
+		printf_s("NvCodec self test\n");
 		printf_s("=========================================================\n");
 
 		g_passed = 0;
@@ -542,6 +757,25 @@ namespace Bench
 		TestReconfigureRejectsInitOnlyFields(bench);
 		TestEncodeThreadRejectsSyncEncoder(bench);
 		TestRepeatedSessions(bench);
+
+		// ---- 디코더 ----
+		// 왕복 하네스는 엔코더와 디코더를 같은 디바이스, 같은 게이트로 돌린다.
+		// 실제 클라이언트가 렌더와 디코드를 한 컨텍스트에서 하는 구성과 같다.
+		RoundTripBench roundTrip;
+		if (roundTrip.Setup(1280, 720))
+		{
+			TestRoundTripDeliversEveryFrame(roundTrip);
+			TestTimestampSurvivesTheRoundTrip(roundTrip);
+			TestPoolExhaustionDropsInsteadOfCorrupting(roundTrip);
+			TestDecoderRejectsInvalidSlotCounts(roundTrip);
+			TestDecoderNeverReentersTheGate(roundTrip);
+			TestRepeatedDecodeSessions(roundTrip);
+		}
+		else
+		{
+			printf_s("\n[SKIP] Round trip setup failed. Decoder cases did not run.\n");
+			++g_failed;
+		}
 
 		printf_s("\n=========================================================\n");
 		printf_s(" self test: %u passed, %u failed\n", g_passed, g_failed);

@@ -73,7 +73,7 @@ private:
 	size_t m_bufferCount = 0;
 	size_t m_bufferSize = 0;
 
-	volatile LONG64 m_dropCount = 0;
+	alignas(8) volatile LONG64 m_dropCount = 0;
 	uint8_t* m_buffers = nullptr;
 	DecodeFrameItem* m_items = nullptr;
 	SlotState* m_states = nullptr;
@@ -82,10 +82,10 @@ private:
 	alignas(64) size_t m_readPos = 0;
 	alignas(64) size_t m_queuedCount = 0;
 	alignas(64) size_t m_heldPos = 0;
-	volatile LONG m_hasHeldFrame = FALSE;
+	alignas(4) volatile LONG m_hasHeldFrame = FALSE;
 
-	volatile LONG m_running = TRUE;
-	volatile LONG m_processCount = 0;
+	alignas(4) volatile LONG m_running = TRUE;
+	alignas(4) volatile LONG m_processCount = 0;
 
 	SRWLOCK m_lock = SRWLOCK_INIT;
 	CONDITION_VARIABLE m_cv = CONDITION_VARIABLE_INIT;

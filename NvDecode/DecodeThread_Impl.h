@@ -35,7 +35,7 @@ private:
 	mutable SRWLOCK m_callbackLock = SRWLOCK_INIT;
 
 	// 관측성: 큐에서 꺼냈지만 디코딩되지 않은 프레임을 센다.
-	volatile LONG64 m_packetsParsedCount = 0;
-	volatile LONG64 m_packetsFailedCount = 0;
-	volatile LONG64 m_framesDeliveredCount = 0;
+	alignas(8) volatile LONG64 m_packetsParsedCount = 0;
+	alignas(8) volatile LONG64 m_packetsFailedCount = 0;
+	alignas(8) volatile LONG64 m_framesDeliveredCount = 0;
 };

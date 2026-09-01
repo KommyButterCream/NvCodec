@@ -4,6 +4,7 @@
 #include <malloc.h>
 #include <assert.h>
 
+
 namespace
 {
 	inline bool IsPowerOfTwo(size_t value)
@@ -140,7 +141,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	}
 
 	// DecodeFrameQueue 사용 중이 아니라면 종료
-	if (::InterlockedCompareExchange(&m_running, TRUE, TRUE) == FALSE)
+	if (::ReadAcquire(&m_running) == FALSE)
 	{
 		return false;
 	}
@@ -149,7 +150,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	::AcquireSRWLockExclusive(&m_lock);
 
 	const bool wasEmpty = (m_queuedCount == 0);
-	const bool hasHeldFrame = (::InterlockedCompareExchange(&m_hasHeldFrame, FALSE, FALSE) == TRUE);
+	const bool hasHeldFrame = (::ReadAcquire(&m_hasHeldFrame) == TRUE);
 	const size_t occupiedCount = m_queuedCount + (hasHeldFrame ? 1 : 0);
 
 	// 프레임 핸들을 저장하기 위한 비어 있는 슬롯을 찾는다.
@@ -242,7 +243,7 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 	{
 		// Queued 된 프레임이 없는 경우
 		// Lock 을 해제하고 Sleep 상태로 들어간다.
-		if (::InterlockedCompareExchange(&m_running, TRUE, TRUE) == FALSE)
+		if (::ReadAcquire(&m_running) == FALSE)
 		{
 			::ReleaseSRWLockExclusive(&m_lock);
 			return nullptr;
@@ -253,7 +254,7 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 
 	// EnqueueFrame 내부에서 WakeConditionVariable 로 Sleep 을 깨운 경우
 	// 현재 처리 중인 프레임이 있다면 종료한다.
-	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
+	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
 	{
 		::ReleaseSRWLockExclusive(&m_lock);
 		return nullptr;
@@ -303,7 +304,7 @@ void DecodeFrameQueue::ReleaseReadFrame()
 
 	// 실제로 프레임을 Acquire 했는지 체크 후
 	// 슬롯 상태를 초기화 해준다.
-	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
+	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
 	{
 		m_states[m_heldPos] = SLOT_FREE;
 		m_items[m_heldPos].size = 0;
@@ -334,18 +335,18 @@ bool DecodeFrameQueue::IsValid() const
 
 bool DecodeFrameQueue::IsRunning() const
 {
-	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_running), TRUE, TRUE) != FALSE;
+	return ::ReadAcquire(&m_running) != FALSE;
 }
 
 int32_t DecodeFrameQueue::GetProcessCount() const
 {
-	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_processCount), 0, 0);
+	return ::ReadAcquire(&m_processCount);
 }
 
 uint64_t DecodeFrameQueue::GetDropCount() const
 {
 	return static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_dropCount), 0, 0));
+		::ReadAcquire64(&m_dropCount));
 }
 
 size_t DecodeFrameQueue::GetBufferSize() const

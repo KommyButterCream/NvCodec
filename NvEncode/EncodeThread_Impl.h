@@ -39,8 +39,8 @@ private:
 
 	// 관측성: 큐에서 꺼냈지만 인코더에 넣지 못한 프레임을 센다.
 	// EncodeFrameQueue::GetDropCount 는 enqueue 측 드롭만 세므로 여기서 따로 센다.
-	volatile LONG64 m_submittedFrameCount = 0;
-	volatile LONG64 m_droppedNoEncoderSlotCount = 0;
-	volatile LONG64 m_droppedPrepareFailedCount = 0;
-	volatile LONG64 m_droppedSubmitFailedCount = 0;
+	alignas(8) volatile LONG64 m_submittedFrameCount = 0;
+	alignas(8) volatile LONG64 m_droppedNoEncoderSlotCount = 0;
+	alignas(8) volatile LONG64 m_droppedPrepareFailedCount = 0;
+	alignas(8) volatile LONG64 m_droppedSubmitFailedCount = 0;
 };

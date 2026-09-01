@@ -7,6 +7,7 @@
 #include <new> // for std::nothrow
 #include <stdio.h> // for printf_s, fopen_s, fwrite
 
+
 namespace
 {
 	// async 파이프라인이 성립하는 최소 버퍼 수량.
@@ -444,7 +445,7 @@ void D3D11NvEncoder_Impl::RequestKeyFrame()
 bool D3D11NvEncoder_Impl::CanSubmitFrame() const
 {
 	return m_encoderHandle && m_pendingFrames &&
-		::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_acceptFrames), TRUE, TRUE) == TRUE &&
+		::ReadAcquire(&m_acceptFrames) == TRUE &&
 		GetPendingFrameCount() < m_encodeBufferCount;
 }
 
@@ -455,7 +456,7 @@ bool D3D11NvEncoder_Impl::SubmitFrame(uint64_t frameId)
 
 	const uint32_t inputSlot = GetInputSlotIndex();
 	NvEncPendingFrame& pendingFrame = m_pendingFrames[inputSlot];
-	if (::InterlockedCompareExchange(&pendingFrame.submitted, TRUE, TRUE) == TRUE)
+	if (::ReadAcquire(&pendingFrame.submitted) == TRUE)
 		return false;
 
 	if (!m_converter || !m_converter->Convert(inputSlot))
@@ -496,8 +497,7 @@ bool D3D11NvEncoder_Impl::SubmitFrame(uint64_t frameId)
 
 uint32_t D3D11NvEncoder_Impl::GetPendingFrameCount() const
 {
-	return static_cast<uint32_t>(::InterlockedCompareExchange(
-		const_cast<volatile LONG*>(&m_pendingFrameCount), 0, 0));
+	return static_cast<uint32_t>(::ReadAcquire(&m_pendingFrameCount));
 }
 
 bool D3D11NvEncoder_Impl::WaitForPendingFrames(uint32_t timeoutMilliseconds) const
@@ -530,17 +530,17 @@ bool D3D11NvEncoder_Impl::DoEncode(NvEncPacket& encodeResultPacket)
 
 bool D3D11NvEncoder_Impl::IsFaulted() const
 {
-	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_faulted), TRUE, TRUE) == TRUE;
+	return ::ReadAcquire(&m_faulted) == TRUE;
 }
 
 void D3D11NvEncoder_Impl::GetStats(NvEncStats& stats) const
 {
 	stats.submittedFrames = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_submittedFrameCount), 0, 0));
+		::ReadAcquire64(&m_submittedFrameCount));
 	stats.completedFrames = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_completedFrameCount), 0, 0));
+		::ReadAcquire64(&m_completedFrameCount));
 	stats.lostFrames = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_lostFrameCount), 0, 0));
+		::ReadAcquire64(&m_lostFrameCount));
 	stats.pendingFrames = GetPendingFrameCount();
 	stats.faulted = IsFaulted();
 }
@@ -553,7 +553,7 @@ void D3D11NvEncoder_Impl::DebugFailNextOutputs(uint32_t count)
 bool D3D11NvEncoder_Impl::ConsumeDebugOutputFailure()
 {
 	// 테스트 훅. 남은 횟수가 있으면 하나 소비하고 실패를 지시한다.
-	LONG remaining = ::InterlockedCompareExchange(&m_debugFailOutputCount, 0, 0);
+	LONG remaining = ::ReadAcquire(&m_debugFailOutputCount);
 	while (remaining > 0)
 	{
 		const LONG previous = ::InterlockedCompareExchange(&m_debugFailOutputCount, remaining - 1, remaining);
@@ -1392,7 +1392,7 @@ NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeC
 	// SubmitFrame 은 submitted = TRUE 를 기록한 뒤에 pending 을 올린다.
 	// 따라서 pending > 0 인데 여기서 FALSE 가 보이면 링 장부가 깨진 것이고
 	// 어느 슬롯을 회수해야 하는지 알 수 없으므로 세션을 포기한다.
-	if (::InterlockedCompareExchange(&pendingFrame.submitted, TRUE, TRUE) != TRUE)
+	if (::ReadAcquire(&pendingFrame.submitted) != TRUE)
 	{
 		printf_s("[NVENC ERROR] Pending frame ring is inconsistent. slot=%u pending=%u\n",
 			outputSlot, GetPendingFrameCount());

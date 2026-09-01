@@ -144,7 +144,7 @@ private:
 
 	// 앱이 AcquireFrame 으로 가져간 뒤 아직 ReleaseFrame 하지 않은 슬롯.
 	// 이 슬롯에는 새 프레임을 쓸 수 없다.
-	volatile LONG m_slotHeldByApp[kMaxOutputSlotCount] = {};
+	alignas(4) volatile LONG m_slotHeldByApp[kMaxOutputSlotCount] = {};
 
 	size_t m_bgraStagingPitch = 0;
 
@@ -161,15 +161,15 @@ private:
 	alignas(64) volatile LONG m_writeSequence = 0;
 	alignas(64) volatile LONG m_readSequence = 0;
 
-	volatile LONG m_faulted = FALSE;
-	volatile LONG m_consecutiveLostFrames = 0;
-	volatile LONG m_framesHeldByApp = 0;
-	volatile LONG64 m_parsedPacketCount = 0;
-	volatile LONG64 m_decodedFrameCount = 0;
-	volatile LONG64 m_deliveredFrameCount = 0;
-	volatile LONG64 m_droppedPoolExhaustedCount = 0;
-	volatile LONG64 m_droppedNotConsumedCount = 0;
-	volatile LONG64 m_droppedDisplayFailedCount = 0;
+	alignas(4) volatile LONG m_faulted = FALSE;
+	alignas(4) volatile LONG m_consecutiveLostFrames = 0;
+	alignas(4) volatile LONG m_framesHeldByApp = 0;
+	alignas(8) volatile LONG64 m_parsedPacketCount = 0;
+	alignas(8) volatile LONG64 m_decodedFrameCount = 0;
+	alignas(8) volatile LONG64 m_deliveredFrameCount = 0;
+	alignas(8) volatile LONG64 m_droppedPoolExhaustedCount = 0;
+	alignas(8) volatile LONG64 m_droppedNotConsumedCount = 0;
+	alignas(8) volatile LONG64 m_droppedDisplayFailedCount = 0;
 
 	ErrorCallback m_errorCallback = nullptr;
 	void* m_errorCallbackUserData = nullptr;

@@ -193,7 +193,7 @@ namespace Bench
 			uint64_t GetParsedCount() const
 			{
 				return static_cast<uint64_t>(
-					::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_parsedCount), 0, 0));
+					::ReadAcquire64(&m_parsedCount));
 			}
 	
 		private:

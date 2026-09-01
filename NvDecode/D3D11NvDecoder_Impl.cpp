@@ -11,6 +11,7 @@
 #include "../../D3D11EngineInterface/ID3D11ImmediateContextGate.h"
 #include "ColorSpaceCuda.cuh"
 
+
 inline bool CheckCudaDriverAPICall(
 	CUresult errorCode,
 	const char* func,
@@ -232,7 +233,7 @@ void D3D11NvDecoder_Impl::Destroy()
 		m_parser = nullptr;
 	}
 
-	const LONG heldByApp = ::InterlockedCompareExchange(&m_framesHeldByApp, 0, 0);
+	const LONG heldByApp = ::ReadAcquire(&m_framesHeldByApp);
 	if (heldByApp > 0)
 	{
 		// 앱이 아직 들고 있는 텍스처를 여기서 해제한다.
@@ -361,15 +362,13 @@ bool D3D11NvDecoder_Impl::Parse(const uint8_t* data, uint32_t size, uint64_t tim
 
 uint32_t D3D11NvDecoder_Impl::GetWriteSlotIndex() const
 {
-	const LONG sequence = ::InterlockedCompareExchange(
-		const_cast<volatile LONG*>(&m_writeSequence), 0, 0);
+	const LONG sequence = ::ReadAcquire(&m_writeSequence);
 	return static_cast<uint32_t>(sequence) & (m_outputSlotCount - 1U);
 }
 
 uint32_t D3D11NvDecoder_Impl::GetReadSlotIndex() const
 {
-	const LONG sequence = ::InterlockedCompareExchange(
-		const_cast<volatile LONG*>(&m_readSequence), 0, 0);
+	const LONG sequence = ::ReadAcquire(&m_readSequence);
 	return static_cast<uint32_t>(sequence) & (m_outputSlotCount - 1U);
 }
 
@@ -380,8 +379,7 @@ bool D3D11NvDecoder_Impl::IsSlotHeldByApp(uint32_t slot) const
 		return false;
 	}
 
-	return ::InterlockedCompareExchange(
-		const_cast<volatile LONG*>(&m_slotHeldByApp[slot]), TRUE, TRUE) == TRUE;
+	return ::ReadAcquire(&m_slotHeldByApp[slot]) == TRUE;
 }
 
 D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
@@ -393,8 +391,8 @@ D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
 		return nullptr;
 	}
 
-	LONG currentWrite = ::InterlockedCompareExchange(&m_writeSequence, 0, 0);
-	LONG currentRead = ::InterlockedCompareExchange(&m_readSequence, 0, 0);
+	LONG currentWrite = ::ReadAcquire(&m_writeSequence);
+	LONG currentRead = ::ReadAcquire(&m_readSequence);
 
 	if (currentRead >= currentWrite)
 	{
@@ -527,25 +525,25 @@ void D3D11NvDecoder_Impl::EnterFaultedState(NvDecErrorCode errorCode)
 
 bool D3D11NvDecoder_Impl::IsFaulted() const
 {
-	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_faulted), TRUE, TRUE) == TRUE;
+	return ::ReadAcquire(&m_faulted) == TRUE;
 }
 
 void D3D11NvDecoder_Impl::GetStats(NvDecStats& stats) const
 {
 	stats.parsedPackets = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_parsedPacketCount), 0, 0));
+		::ReadAcquire64(&m_parsedPacketCount));
 	stats.decodedFrames = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_decodedFrameCount), 0, 0));
+		::ReadAcquire64(&m_decodedFrameCount));
 	stats.deliveredFrames = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_deliveredFrameCount), 0, 0));
+		::ReadAcquire64(&m_deliveredFrameCount));
 	stats.droppedPoolExhausted = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_droppedPoolExhaustedCount), 0, 0));
+		::ReadAcquire64(&m_droppedPoolExhaustedCount));
 	stats.droppedNotConsumed = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_droppedNotConsumedCount), 0, 0));
+		::ReadAcquire64(&m_droppedNotConsumedCount));
 	stats.droppedDisplayFailed = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_droppedDisplayFailedCount), 0, 0));
+		::ReadAcquire64(&m_droppedDisplayFailedCount));
 	stats.framesHeldByApp = static_cast<uint32_t>(
-		::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_framesHeldByApp), 0, 0));
+		::ReadAcquire(&m_framesHeldByApp));
 	stats.faulted = IsFaulted();
 }
 
@@ -733,7 +731,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	}
 
 	// Reconfigure 가 수행 중이라면 버퍼 초기화가 수행되므로 함수를 그냥 빠져나가도록 한다.
-	if (::InterlockedCompareExchange(&m_reconfiguring, FALSE, FALSE) == TRUE)
+	if (::ReadAcquire(&m_reconfiguring) == TRUE)
 	{
 		return 0;
 	}
@@ -779,8 +777,8 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	mappedVideoFrame = true;
 
 	// Atomic 하게 Current Write, Read Pos 를 읽어온다.
-	currentWrite = ::InterlockedCompareExchange(&m_writeSequence, 0, 0);
-	currentRead = ::InterlockedCompareExchange(&m_readSequence, 0, 0);
+	currentWrite = ::ReadAcquire(&m_writeSequence);
+	currentRead = ::ReadAcquire(&m_readSequence);
 	if ((currentWrite - currentRead) >= static_cast<LONG>(m_outputSlotCount))
 	{
 		// 앱이 가져가지 않아 링이 한 바퀴 찼다. 오래된 것을 버리고 진행한다.
@@ -866,9 +864,13 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	//    return -1;
 	//}
 
-	// Timestamp 를 기록하고 다음 슬롯에 쓰기 위해 시퀀스를 증가시킨다.
+	// 페이로드를 먼저 쓰고 시퀀스를 올린다. InterlockedIncrement 가 full barrier 라
+	// 이 순서는 컴파일러도 CPU 도 뒤집지 못한다 — 소비자가 시퀀스를 본 시점에
+	// timestamp 는 반드시 보인다. 예전에 있던 MemoryBarrier 는 중복이었다.
+	//
+	// 텍스처 내용은 이 배리어의 관할이 아니다. 그쪽은 GPU 가 쓰므로
+	// m_decodeCompleteEvents 와 AcquireFrame 의 cuEventSynchronize 가 담당한다.
 	m_frames[slot].timestamp = displayInfo->timestamp;
-	::MemoryBarrier();
 	::InterlockedIncrement(&m_writeSequence);
 	::InterlockedIncrement64(&m_decodedFrameCount);
 	NoteHealthyFrame();

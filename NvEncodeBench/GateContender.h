@@ -63,14 +63,14 @@ namespace Bench
 		uint64_t GetAcquireCount() const
 		{
 			return static_cast<uint64_t>(
-				::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_acquireCount), 0, 0));
+				::ReadAcquire64(&m_acquireCount));
 		}
 
 		// 게이트를 얻기까지 기다린 최대 시간. 상대가 게이트를 오래 잡으면 커진다.
 		double GetMaxWaitMs() const
 		{
 			const LONG64 ticks =
-				::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_maxWaitTicks), 0, 0);
+				::ReadAcquire64(&m_maxWaitTicks);
 			return TicksToMilliseconds(ticks);
 		}
 
@@ -94,7 +94,7 @@ namespace Bench
 				{
 					D3D11ImmediateContextGuard guard(m_gate);
 					const int64_t waited = QpcNow() - waitStart;
-					if (waited > ::InterlockedCompareExchange64(&m_maxWaitTicks, 0, 0))
+					if (waited > ::ReadAcquire64(&m_maxWaitTicks))
 						::InterlockedExchange64(&m_maxWaitTicks, waited);
 
 					::InterlockedIncrement64(&m_acquireCount);
@@ -120,7 +120,7 @@ namespace Bench
 		int64_t m_intervalTicks = 0;
 		HANDLE m_thread = nullptr;
 		HANDLE m_stopEvent = nullptr;
-		volatile LONG64 m_acquireCount = 0;
-		volatile LONG64 m_maxWaitTicks = 0;
+		alignas(8) volatile LONG64 m_acquireCount = 0;
+		alignas(8) volatile LONG64 m_maxWaitTicks = 0;
 	};
 }

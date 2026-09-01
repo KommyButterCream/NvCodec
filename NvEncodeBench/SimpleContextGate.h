@@ -54,7 +54,7 @@ namespace Bench
 		uint64_t GetRecursiveEnterCount() const
 		{
 			return static_cast<uint64_t>(
-				::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_recursiveEnterCount), 0, 0));
+				::ReadAcquire64(&m_recursiveEnterCount));
 		}
 
 		bool IsEnabled() const override { return true; }
@@ -63,7 +63,7 @@ namespace Bench
 		uint64_t GetEnterCount() const
 		{
 			return static_cast<uint64_t>(
-				::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_enterCount), 0, 0));
+				::ReadAcquire64(&m_enterCount));
 		}
 
 		void ResetEnterCount()
@@ -74,8 +74,8 @@ namespace Bench
 
 	private:
 		CRITICAL_SECTION m_lock = {};
-		volatile LONG64 m_enterCount = 0;
-		volatile LONG64 m_recursiveEnterCount = 0;
-		volatile LONG m_depth = 0;
+		alignas(8) volatile LONG64 m_enterCount = 0;
+		alignas(8) volatile LONG64 m_recursiveEnterCount = 0;
+		alignas(4) volatile LONG m_depth = 0;
 	};
 }

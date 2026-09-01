@@ -50,7 +50,7 @@ struct NvEncPacketBuffer
 struct NvEncPendingFrame
 {
 	uint64_t frameId = 0;
-	volatile LONG submitted = FALSE;
+	alignas(4) volatile LONG submitted = FALSE;
 };
 
 class D3D11NvEncoder_Impl
@@ -212,14 +212,14 @@ private:
 	uint64_t m_timeStamp = 0;
 	uint32_t m_inputSequence = 0;
 	uint32_t m_outputSequence = 0;
-	volatile LONG m_pendingFrameCount = 0;
-	volatile LONG m_forceKeyFrame = FALSE;
-	volatile LONG m_acceptFrames = FALSE;
-	volatile LONG m_faulted = FALSE;
-	volatile LONG m_debugFailOutputCount = 0;
-	volatile LONG64 m_submittedFrameCount = 0;
-	volatile LONG64 m_completedFrameCount = 0;
-	volatile LONG64 m_lostFrameCount = 0;
+	alignas(4) volatile LONG m_pendingFrameCount = 0;
+	alignas(4) volatile LONG m_forceKeyFrame = FALSE;
+	alignas(4) volatile LONG m_acceptFrames = FALSE;
+	alignas(4) volatile LONG m_faulted = FALSE;
+	alignas(4) volatile LONG m_debugFailOutputCount = 0;
+	alignas(8) volatile LONG64 m_submittedFrameCount = 0;
+	alignas(8) volatile LONG64 m_completedFrameCount = 0;
+	alignas(8) volatile LONG64 m_lostFrameCount = 0;
 	bool m_asyncPipelineEnabled = true;
 	EncodedPacketCallback m_encodedPacketCallback = nullptr;
 	void* m_encodedPacketCallbackUserData = nullptr;

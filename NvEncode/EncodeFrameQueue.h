@@ -88,11 +88,11 @@ private:
 	alignas(64) uint32_t m_readPos = 0;
 	alignas(64) uint32_t m_queuedCount = 0;
 	alignas(64) uint32_t m_heldPos = 0;
-	volatile LONG m_hasHeldFrame = FALSE;
+	alignas(4) volatile LONG m_hasHeldFrame = FALSE;
 
-	volatile LONG m_running = FALSE;
-	volatile LONG m_dropCount = 0;
-	volatile LONG m_processCount = 0;
+	alignas(4) volatile LONG m_running = FALSE;
+	alignas(4) volatile LONG m_dropCount = 0;
+	alignas(4) volatile LONG m_processCount = 0;
 
 	ReleaseFrameCallback m_releaseCallback = nullptr;
 	void* m_releaseCallbackUserData = nullptr;

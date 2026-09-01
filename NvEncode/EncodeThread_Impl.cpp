@@ -6,6 +6,7 @@
 
 #include <stdio.h> // for printf_s
 
+
 EncodeThread_Impl::EncodeThread_Impl()
 	: Core::Concurrency::ThreadBase(L"EncodeThread")
 {
@@ -116,13 +117,13 @@ void EncodeThread_Impl::SetKeyFrameRequestCallback(EncodeThread::KeyFrameRequest
 void EncodeThread_Impl::GetStats(EncodeThread::Stats& stats) const
 {
 	stats.framesSubmitted = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_submittedFrameCount), 0, 0));
+		::ReadAcquire64(&m_submittedFrameCount));
 	stats.framesDroppedNoEncoderSlot = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_droppedNoEncoderSlotCount), 0, 0));
+		::ReadAcquire64(&m_droppedNoEncoderSlotCount));
 	stats.framesDroppedPrepareFailed = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_droppedPrepareFailedCount), 0, 0));
+		::ReadAcquire64(&m_droppedPrepareFailedCount));
 	stats.framesDroppedSubmitFailed = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_droppedSubmitFailedCount), 0, 0));
+		::ReadAcquire64(&m_droppedSubmitFailedCount));
 }
 
 bool EncodeThread_Impl::QueryKeyFrameRequest()

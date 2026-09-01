@@ -3,6 +3,7 @@
 
 #include <new> // for std::nothrow
 
+
 namespace
 {
 	// HELD 슬롯과 QUEUED 슬롯이 공존할 수 있어야 하므로 최소 2 개가 필요하다.
@@ -132,7 +133,7 @@ bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool f
 	if (!m_items || !m_states || !frameHandle.texture)
 		return false;
 
-	if (::InterlockedCompareExchange(&m_running, TRUE, TRUE) == FALSE)
+	if (::ReadAcquire(&m_running) == FALSE)
 		return false;
 
 	::AcquireSRWLockExclusive(&m_lock);
@@ -180,7 +181,7 @@ EncodeFrameQueue::EncodeFrameItem* EncodeFrameQueue::AcquireReadFrame()
 	{
 		// Queued 된 프레임이 없는 경우
 		// Lock 을 해제하고 Sleep 상태로 들어간다.
-		if (::InterlockedCompareExchange(&m_running, TRUE, TRUE) == FALSE)
+		if (::ReadAcquire(&m_running) == FALSE)
 		{
 			::ReleaseSRWLockExclusive(&m_lock);
 			return nullptr;
@@ -191,7 +192,7 @@ EncodeFrameQueue::EncodeFrameItem* EncodeFrameQueue::AcquireReadFrame()
 
 	// EnqueueFrame 내부에서 WakeConditionVariable 로 Sleep 을 깨운 경우
 	// 현재 처리 중인 프레임이 있다면 종료한다.
-	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
+	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
 	{
 		::ReleaseSRWLockExclusive(&m_lock);
 		return nullptr;
@@ -231,7 +232,7 @@ void EncodeFrameQueue::ReleaseReadFrame()
 
 	// 실제로 프레임을 Acquire 했는지 체크 후
 	// 슬롯 상태를 초기화 해준다.
-	if (::InterlockedCompareExchange(&m_hasHeldFrame, TRUE, TRUE) == TRUE)
+	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
 	{
 		ReleaseFrameHandle(m_items[m_heldPos].frameHandle);
 		m_items[m_heldPos] = EncodeFrameItem();
@@ -245,17 +246,17 @@ void EncodeFrameQueue::ReleaseReadFrame()
 
 bool EncodeFrameQueue::IsRunning() const
 {
-	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_running), TRUE, TRUE) != FALSE;
+	return ::ReadAcquire(&m_running) != FALSE;
 }
 
 uint32_t EncodeFrameQueue::GetDropCount() const
 {
-	return static_cast<uint32_t>(::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_dropCount), 0, 0));
+	return static_cast<uint32_t>(::ReadAcquire(&m_dropCount));
 }
 
 uint32_t EncodeFrameQueue::GetProcessCount() const
 {
-	return static_cast<uint32_t>(::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_processCount), 0, 0));
+	return static_cast<uint32_t>(::ReadAcquire(&m_processCount));
 }
 
 void EncodeFrameQueue::ReleaseFrameHandle(InputFrameHandle& frameHandle)

@@ -5,6 +5,7 @@
 
 #include <stdio.h> // for printf_s
 
+
 DecodeThread_Impl::DecodeThread_Impl()
 	: Core::Concurrency::ThreadBase(L"DecodeThread")
 {
@@ -71,11 +72,11 @@ void DecodeThread_Impl::SetFrameCallback(FrameCallback callback, void* userData)
 void DecodeThread_Impl::GetStats(DecodeThread::Stats& stats) const
 {
 	stats.packetsParsed = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_packetsParsedCount), 0, 0));
+		::ReadAcquire64(&m_packetsParsedCount));
 	stats.packetsFailed = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_packetsFailedCount), 0, 0));
+		::ReadAcquire64(&m_packetsFailedCount));
 	stats.framesDelivered = static_cast<uint64_t>(
-		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_framesDeliveredCount), 0, 0));
+		::ReadAcquire64(&m_framesDeliveredCount));
 }
 
 void DecodeThread_Impl::DispatchFrame(const D3D11NvDecoder::Frame& frame)

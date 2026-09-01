@@ -18,13 +18,46 @@ D3D11NvEncoder::~D3D11NvEncoder()
 
 bool D3D11NvEncoder::Initialize(
 	ID3D11Device* device,
+	const NvEncConfig& config,
+	ID3D11ImmediateContextGate* contextGate)
+{
+	return m_impl && m_impl->Initialize(device, config, contextGate);
+}
+
+bool D3D11NvEncoder::Initialize(
+	ID3D11Device* device,
 	uint32_t width,
 	uint32_t height,
 	uint32_t encodeBufferCount,
 	ID3D11ImmediateContextGate* contextGate,
 	bool enableAsyncPipeline)
 {
-	return m_impl && m_impl->Initialize(device, width, height, encodeBufferCount, contextGate, enableAsyncPipeline);
+	NvEncConfig config;
+	config.width = width;
+	config.height = height;
+	config.encodeBufferCount = encodeBufferCount;
+	config.enableAsyncPipeline = enableAsyncPipeline;
+
+	return Initialize(device, config, contextGate);
+}
+
+NvEncReconfigureResult D3D11NvEncoder::Reconfigure(const NvEncConfig& config, bool forceIdr)
+{
+	return m_impl
+		? m_impl->Reconfigure(config, forceIdr)
+		: NvEncReconfigureResult::NotInitialized;
+}
+
+void D3D11NvEncoder::GetConfig(NvEncConfig& config) const
+{
+	if (m_impl)
+	{
+		m_impl->GetConfig(config);
+	}
+	else
+	{
+		config = NvEncConfig();
+	}
 }
 
 void D3D11NvEncoder::Destroy()

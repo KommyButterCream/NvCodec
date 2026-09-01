@@ -1,4 +1,4 @@
-<title>NVENC Encode Pipeline</title>
+﻿<title>NVENC Encode Pipeline</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
 
 <style>
@@ -882,6 +882,79 @@
       depth 1 and 604 fps it is 1.66 ms. At a realistic 60 fps neither is saturated and the two are
       indistinguishable. Below 120 fps the dominant term is not the pipeline at all — it is GPU
       downclocking.
+    </div>
+  </section>
+
+  <!-- ============ 8. CONFIG ============ -->
+  <section>
+    <div class="sechead"><span class="secnum">08</span><h2>어떤 설정이 인코딩 중에 바뀌는가</h2></div>
+
+    <p>
+      <code>NvEncConfig</code> 하나로 초기화하고, <code>Reconfigure()</code>로 인코딩을 멈추지
+      않은 채 일부를 바꾼다. 무엇이 바뀔 수 있는지는 우리가 정한 게 아니라
+      <strong>NVENC가 정한다</strong> — SDK가 GOP 구조, sync/async 전환, 최대 해상도 변경을
+      명시적으로 금지하고 있어.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>필드</th><th>인코딩 중 변경</th><th>근거</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>averageBitrateBps</code> / <code>maxBitrateBps</code></td><td><span class="verdict live">가능</span></td><td>네트워크 적응의 주 용도</td></tr>
+          <tr><td><code>vbvBufferSizeBits</code></td><td><span class="verdict live">가능</span></td><td>rcParams</td></tr>
+          <tr><td><code>frameRateNumerator/Denominator</code></td><td><span class="verdict live">가능</span></td><td>레이트 계산 기준</td></tr>
+          <tr><td><code>rateControl</code> (CBR/VBR/ConstQP)</td><td><span class="verdict live">가능</span></td><td>rcParams</td></tr>
+          <tr><td><code>minQP</code> / <code>maxQP</code> / <code>targetQuality</code></td><td><span class="verdict live">가능</span></td><td>rcParams</td></tr>
+          <tr><td><code>width</code> / <code>height</code></td><td><span class="verdict dead">불가</span></td><td>텍스처 풀과 컨버터 뷰 재생성이 필요</td></tr>
+          <tr><td><code>profile</code></td><td><span class="verdict dead">불가</span></td><td>재초기화</td></tr>
+          <tr><td><code>latencyMode</code></td><td><span class="verdict dead">불가</span></td><td>SDK: 프리셋 변경은 GOP 구조가 바뀌면 실패</td></tr>
+          <tr><td><code>enableIntraRefresh</code> / <code>gopLengthFrames</code></td><td><span class="verdict dead">불가</span></td><td>SDK 명시: GOP 구조 변경 불가</td></tr>
+          <tr><td><code>encodeBufferCount</code> / <code>enableAsyncPipeline</code></td><td><span class="verdict dead">불가</span></td><td>SDK 명시: sync/async 전환 불가</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>사용 방식</h3>
+    <p>
+      현재 설정을 읽어 고친 뒤 되돌려주는 편이 안전해. 그래야 다른 필드를 실수로 초기화하지 않아.
+    </p>
+
+    <div class="note">
+      <b>거절은 전부-아니면-전무다.</b> <code>[init]</code> 필드가 하나라도 달라지면
+      <code>InitOnlyFieldChanged</code>를 반환하고 <strong>아무것도 적용하지 않아.</strong>
+      부분 적용으로 설정이 반쯤 어긋난 상태가 생기지 않아. 드라이버가 거절해도
+      이전 rate control 값으로 되돌려 놔.
+      비트레이트만 낮출 때는 <code>forceIdr = false</code>가 맞아 — IDR은 P프레임의 몇 배
+      크기라 혼잡한 상황을 더 악화시켜.
+    </div>
+
+    <h3>저지연 기본값이 실제로 하는 일</h3>
+    <p>
+      기본값은 <code>latencyMode = UltraLow</code>, VBV 1프레임, intra refresh 켜짐이야.
+      이 셋의 효과는 지연이 아니라 <strong>프레임 크기 균일성</strong>에 나타나.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>설정</th><th>max/mean</th><th>최대 프레임</th><th>5 Mbps 전송 시간</th><th>처리량</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>vbv 5프레임 + IDR60 + LOW_LATENCY</td><td class="num">4.62</td><td class="num">45.1 KB</td><td class="num">73.9 ms</td><td class="num">769 fps</td></tr>
+          <tr><td>vbv 1프레임 + IDR60 + LOW_LATENCY</td><td class="num">2.75</td><td class="num">33.9 KB</td><td class="num">55.5 ms</td><td class="num">765 fps</td></tr>
+          <tr><td>vbv 1프레임 + IDR60 + ULTRA_LOW</td><td class="num">1.13</td><td class="num">10.4 KB</td><td class="num">17.0 ms</td><td class="num">596 fps</td></tr>
+          <tr><td><strong>vbv 1프레임 + intra refresh + ULTRA_LOW</strong></td><td class="num">1.89</td><td class="num">14.9 KB</td><td class="num"><strong>24.4 ms</strong></td><td class="num">588 fps</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <b>이 이득은 하네스가 재는 지연에는 안 나타난다.</b> 측정 구간이 큐 투입 → 콜백 도착이라
+      네트워크 전송이 빠져 있어. 실제 이득은 전송 구간에 있고, 최악 전송 시간이
+      73.9 ms → 24.4 ms로 약 3배 줄어. 대신 <code>ULTRA_LOW</code>는 처리량을 23% 깎아 —
+      1080p60에서는 필요량의 10배라 무관하지만 4K나 다중 스트림에서는 다시 판단해야 해.
     </div>
   </section>
 

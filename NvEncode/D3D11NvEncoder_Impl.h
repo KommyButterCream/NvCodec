@@ -8,6 +8,7 @@
 #include <dxgiformat.h>
 
 #include "../Nvidia Video Codec SDK/Interface/nvEncodeAPI.h"
+#include "NvEncConfig.h"
 #include "NvEncPacket.h"
 
 struct ID3D11Device;
@@ -68,11 +69,10 @@ public:
 
 	bool Initialize(
 		ID3D11Device* device,
-		uint32_t width,
-		uint32_t height,
-		uint32_t encodeBufferCount,
-		ID3D11ImmediateContextGate* contextGate,
-		bool enableAsyncPipeline);
+		const NvEncConfig& config,
+		ID3D11ImmediateContextGate* contextGate);
+	NvEncReconfigureResult Reconfigure(const NvEncConfig& config, bool forceIdr);
+	void GetConfig(NvEncConfig& config) const;
 	void Destroy();
 
 	void SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData);
@@ -96,6 +96,12 @@ private:
 
 	bool LoadNvEncApi();
 	bool OpenEncodeSession();
+
+	// NvEncConfig 를 NVENC 구조체로 옮긴다. Initialize 와 Reconfigure 가 공유한다.
+	// [init] 필드까지 채우는 것은 Initialize 뿐이고, Reconfigure 는 rate control 만 갱신한다.
+	void ApplyStaticConfig(const NvEncConfig& config);
+	void ApplyRateControlConfig(const NvEncConfig& config);
+	static bool StaticFieldsDiffer(const NvEncConfig& a, const NvEncConfig& b);
 
 	bool InitializeEncoder();
 	void DestroyEncoder();
@@ -223,4 +229,8 @@ private:
 
 	uint32_t m_width = 0;
 	uint32_t m_height = 0;
+
+	// 앱이 준 설정 원본. Reconfigure 가 [init] 필드 변경을 감지하는 기준이 된다.
+	NvEncConfig m_userConfig = {};
+	mutable SRWLOCK m_configLock = SRWLOCK_INIT;
 };

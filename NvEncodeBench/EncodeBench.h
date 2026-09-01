@@ -11,6 +11,7 @@
 #include "LatencyStats.h"
 #include "../NvEncode/EncodeFrameQueue.h"
 #include "../NvEncode/EncodeThread.h"
+#include "../NvEncode/NvEncConfig.h"
 #include "../NvEncode/NvEncPacket.h"
 
 struct ID3D11Device;
@@ -42,6 +43,20 @@ namespace Bench
 		// 수행하므로 CPU 바운드 작업이다. Sleep 이 아니라 스핀으로 흉내낸다.
 		// 이 시간이 파이프라인 처리량/지연에 얼마나 영향을 주는지 재기 위한 것.
 		uint32_t callbackDelayMicroseconds = 0;
+
+		// 엔코더 설정. 하네스는 이 값을 그대로 D3D11NvEncoder::Initialize 에 넘긴다.
+		NvEncLatencyMode latencyMode = NvEncLatencyMode::UltraLow;
+		NvEncH264Profile profile = NvEncH264Profile::High;
+		bool enableIntraRefresh = true;
+		uint32_t intraRefreshPeriodFrames = 60;
+		uint32_t gopLengthFrames = 60;
+		uint32_t bitrateBps = 5000000;
+		uint32_t vbvBufferSizeBits = 0;   // 0 = 1 프레임 자동
+
+		// 런타임 재설정 검증용.
+		// reconfigureAtFrame 번째 프레임에서 비트레이트를 reconfigureBitrateBps 로 바꾼다.
+		uint32_t reconfigureAtFrame = 0;
+		uint32_t reconfigureBitrateBps = 0;
 
 		// 게이트를 경합시키는 가짜 렌더 스레드.
 		// contendHz 회/초로 게이트를 잡고 contendMicroseconds 동안 점유한다.
@@ -84,6 +99,10 @@ namespace Bench
 		uint64_t gateEnterCount = 0;
 		uint64_t contendAcquireCount = 0;
 		double contendMaxWaitMs = 0.0;
+		uint32_t reconfigureApplied = 0;
+		uint32_t reconfigureRejected = 0;
+		uint64_t bytesBeforeReconfigure = 0;
+		uint64_t framesBeforeReconfigure = 0;
 		uint64_t gateRecursiveEnterCount = 0;   // 0 이 아니면 실제 게이트에서 데드락한다
 		uint64_t gateEnterCountDuringInit = 0;  // Initialize 구간의 게이트 획득 수
 		uint64_t gateEnterCountDuringDestroy = 0;

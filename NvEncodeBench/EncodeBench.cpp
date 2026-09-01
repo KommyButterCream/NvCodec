@@ -391,6 +391,19 @@ namespace Bench
 			::LeaveCriticalSection(&statsLock);
 		}
 
+		// Reconfigure 직전의 누적치를 기록해 두면
+		// 변경 전후의 평균 프레임 크기를 나눠서 볼 수 있다.
+		void SnapshotBeforeReconfigure()
+		{
+			::EnterCriticalSection(&statsLock);
+			if (result)
+			{
+				result->bytesBeforeReconfigure = result->totalBytes;
+				result->framesBeforeReconfigure = result->encodedPackets;
+			}
+			::LeaveCriticalSection(&statsLock);
+		}
+
 		void SpinCallbackDelay() const
 		{
 			if (config)
@@ -554,15 +567,24 @@ namespace Bench
 		m_impl->gate.ResetEnterCount();
 		m_impl->latencyStats.Reserve(config.frameCount);
 
+		NvEncConfig encoderConfig;
+		encoderConfig.width = config.width;
+		encoderConfig.height = config.height;
+		encoderConfig.encodeBufferCount = config.encodeBufferCount;
+		encoderConfig.enableAsyncPipeline = config.asyncPipeline;
+		encoderConfig.latencyMode = config.latencyMode;
+		encoderConfig.profile = config.profile;
+		encoderConfig.enableIntraRefresh = config.enableIntraRefresh;
+		encoderConfig.intraRefreshPeriodFrames = config.intraRefreshPeriodFrames;
+		encoderConfig.gopLengthFrames = config.gopLengthFrames;
+		encoderConfig.averageBitrateBps = config.bitrateBps;
+		encoderConfig.vbvBufferSizeBits = config.vbvBufferSizeBits;
+		encoderConfig.frameRateNumerator = (config.targetFps > 0) ? config.targetFps : 60U;
+		encoderConfig.frameRateDenominator = 1;
+
 		D3D11NvEncoder encoder;
 		const uint64_t gateCountBeforeInit = m_impl->gate.GetEnterCount();
-		if (!encoder.Initialize(
-			m_device,
-			config.width,
-			config.height,
-			config.encodeBufferCount,
-			&m_impl->gate,
-			config.asyncPipeline))
+		if (!encoder.Initialize(m_device, encoderConfig, &m_impl->gate))
 		{
 			printf_s("[BENCH ERROR] Encoder Initialize failed. encodeBufferCount=%u\n",
 				config.encodeBufferCount);
@@ -680,6 +702,27 @@ namespace Bench
 				printf_s("  >> injecting %u output failures at frame %u\n",
 					config.faultInjectCount, frameIndex);
 				encoder.DebugFailNextOutputs(config.faultInjectCount);
+			}
+
+			// 인코딩 중 비트레이트 변경. 네트워크 적응을 흉내낸다.
+			// 파이프라인을 멈추지 않고 임의의 스레드에서 호출할 수 있어야 한다.
+			if (config.reconfigureBitrateBps > 0 && frameIndex == config.reconfigureAtFrame)
+			{
+				m_impl->SnapshotBeforeReconfigure();
+
+				NvEncConfig live = {};
+				encoder.GetConfig(live);
+				live.averageBitrateBps = config.reconfigureBitrateBps;
+
+				const NvEncReconfigureResult reconfigureResult = encoder.Reconfigure(live, false);
+				if (reconfigureResult == NvEncReconfigureResult::Applied)
+					result.reconfigureApplied++;
+				else
+					result.reconfigureRejected++;
+
+				printf_s("  >> reconfigure at frame %u: %u -> %u bps (result %u)\n",
+					frameIndex, config.bitrateBps, config.reconfigureBitrateBps,
+					static_cast<uint32_t>(reconfigureResult));
 			}
 
 			const uint64_t frameId = static_cast<uint64_t>(frameIndex);
@@ -847,6 +890,27 @@ namespace Bench
 		printf_s(" gate init / destroy  : %llu / %llu\n",
 			static_cast<unsigned long long>(result.gateEnterCountDuringInit),
 			static_cast<unsigned long long>(result.gateEnterCountDuringDestroy));
+		if (result.reconfigureApplied > 0 || result.reconfigureRejected > 0)
+		{
+			const uint64_t afterFrames = result.encodedPackets - result.framesBeforeReconfigure;
+			const uint64_t afterBytes = result.totalBytes - result.bytesBeforeReconfigure;
+			const double beforeKb = (result.framesBeforeReconfigure > 0)
+				? static_cast<double>(result.bytesBeforeReconfigure)
+					/ static_cast<double>(result.framesBeforeReconfigure) / 1024.0
+				: 0.0;
+			const double afterKb = (afterFrames > 0)
+				? static_cast<double>(afterBytes) / static_cast<double>(afterFrames) / 1024.0
+				: 0.0;
+
+			printf_s("---------------------------------------------------------\n");
+			printf_s(" reconfigure          : %u applied, %u rejected\n",
+				result.reconfigureApplied, result.reconfigureRejected);
+			printf_s(" avg packet before/after : %.1f / %.1f KB  (%llu / %llu frames)\n",
+				beforeKb, afterKb,
+				static_cast<unsigned long long>(result.framesBeforeReconfigure),
+				static_cast<unsigned long long>(afterFrames));
+		}
+
 		if (result.contendAcquireCount > 0)
 		{
 			printf_s(" contender acquires   : %llu (max wait for gate %.3f ms)\n",

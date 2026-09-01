@@ -30,6 +30,13 @@ namespace
 			"  --sync               use DoEncode on this thread instead of EncodeThread\n"
 			"  --callback-delay N   burn N microseconds of CPU inside the encoded-frame\n"
 			"                       callback, simulating the broadcast work   (default 0)\n"
+			"  --bitrate N          target bitrate in bps            (default 5000000)\n"
+			"  --vbv N              VBV size in bits, 0 = one frame  (default 0)\n"
+			"  --latency-mode N     0 ultra-low, 1 low, 2 quality    (default 0)\n"
+			"  --profile N          0 baseline, 1 main, 2 high       (default 2)\n"
+			"  --intra-refresh N    1 on, 0 off (periodic IDR)       (default 1)\n"
+			"  --reconfigure-at N        change the bitrate at frame N\n"
+			"  --reconfigure-bitrate N   ...to this many bps\n"
 			"  --contend-hz N       fake render thread takes the gate N times/sec (default 0)\n"
 			"  --contend-us N       ...and holds it for N microseconds        (default 0)\n"
 			"  --fault-at N         inject output failures at frame N (default 0)\n"
@@ -160,6 +167,42 @@ int main(int argc, char** argv)
 		else if (::_stricmp(arg, "--callback-delay") == 0)
 		{
 			if (!TakeUInt32Argument(argc, argv, argIndex, arg, config.callbackDelayMicroseconds)) return 2;
+		}
+		else if (::_stricmp(arg, "--bitrate") == 0)
+		{
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, config.bitrateBps)) return 2;
+		}
+		else if (::_stricmp(arg, "--vbv") == 0)
+		{
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, config.vbvBufferSizeBits)) return 2;
+		}
+		else if (::_stricmp(arg, "--intra-refresh") == 0)
+		{
+			uint32_t on = 1;
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, on)) return 2;
+			config.enableIntraRefresh = (on != 0);
+		}
+		else if (::_stricmp(arg, "--latency-mode") == 0)
+		{
+			uint32_t mode = 0;
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, mode)) return 2;
+			if (mode > 2) { printf_s("[ARG ERROR] --latency-mode must be 0..2\n"); return 2; }
+			config.latencyMode = static_cast<NvEncLatencyMode>(mode);
+		}
+		else if (::_stricmp(arg, "--profile") == 0)
+		{
+			uint32_t p = 2;
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, p)) return 2;
+			if (p > 2) { printf_s("[ARG ERROR] --profile must be 0..2\n"); return 2; }
+			config.profile = static_cast<NvEncH264Profile>(p);
+		}
+		else if (::_stricmp(arg, "--reconfigure-at") == 0)
+		{
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, config.reconfigureAtFrame)) return 2;
+		}
+		else if (::_stricmp(arg, "--reconfigure-bitrate") == 0)
+		{
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, config.reconfigureBitrateBps)) return 2;
 		}
 		else if (::_stricmp(arg, "--contend-hz") == 0)
 		{

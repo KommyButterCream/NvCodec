@@ -42,6 +42,68 @@ namespace
 #define NVENC_API_CALL(call) \
     CheckNvEncodeAPICall((call), #call, __FUNCTION__, __FILE__, __LINE__)
 
+	// 저지연 목적에서는 프리셋보다 튜닝이 지연을 결정한다.
+	// UltraLow 와 Low 가 같은 프리셋을 쓰는 것은 의도적이다 —
+	// 프리셋을 낮추면 화질이 같이 떨어지므로, 먼저 튜닝만 바꿔 효과를 재고
+	// 필요하면 그때 프리셋을 조정한다.
+	GUID ToPresetGuid(NvEncLatencyMode mode)
+	{
+		switch (mode)
+		{
+		case NvEncLatencyMode::UltraLow: return NV_ENC_PRESET_P3_GUID;
+		case NvEncLatencyMode::Low:      return NV_ENC_PRESET_P3_GUID;
+		case NvEncLatencyMode::Quality:  return NV_ENC_PRESET_P5_GUID;
+		default:                         return NV_ENC_PRESET_P3_GUID;
+		}
+	}
+
+	NV_ENC_TUNING_INFO ToTuningInfo(NvEncLatencyMode mode)
+	{
+		switch (mode)
+		{
+		case NvEncLatencyMode::UltraLow: return NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+		case NvEncLatencyMode::Low:      return NV_ENC_TUNING_INFO_LOW_LATENCY;
+		case NvEncLatencyMode::Quality:  return NV_ENC_TUNING_INFO_HIGH_QUALITY;
+		default:                         return NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+		}
+	}
+
+	GUID ToProfileGuid(NvEncH264Profile profile)
+	{
+		switch (profile)
+		{
+		case NvEncH264Profile::Baseline: return NV_ENC_H264_PROFILE_BASELINE_GUID;
+		case NvEncH264Profile::Main:     return NV_ENC_H264_PROFILE_MAIN_GUID;
+		case NvEncH264Profile::High:     return NV_ENC_H264_PROFILE_HIGH_GUID;
+		default:                         return NV_ENC_H264_PROFILE_HIGH_GUID;
+		}
+	}
+
+	NV_ENC_PARAMS_RC_MODE ToRateControlMode(NvEncRateControl rateControl)
+	{
+		switch (rateControl)
+		{
+		case NvEncRateControl::ConstantBitrate: return NV_ENC_PARAMS_RC_CBR;
+		case NvEncRateControl::VariableBitrate: return NV_ENC_PARAMS_RC_VBR;
+		case NvEncRateControl::ConstantQP:      return NV_ENC_PARAMS_RC_CONSTQP;
+		default:                                return NV_ENC_PARAMS_RC_CBR;
+		}
+	}
+
+	// 저지연 기본값: VBV 를 1 프레임 분량으로 잡는다.
+	// 이보다 크면 복잡한 장면에서 프레임 하나가 부풀어 전송이 늦어지고,
+	// 작으면 화질이 과하게 떨어진다.
+	uint32_t ComputeSingleFrameVbvBits(uint32_t bitrateBps, uint32_t fpsNum, uint32_t fpsDen)
+	{
+		if (bitrateBps == 0 || fpsNum == 0 || fpsDen == 0)
+			return 0;
+
+		const uint64_t bits =
+			(static_cast<uint64_t>(bitrateBps) * static_cast<uint64_t>(fpsDen))
+			/ static_cast<uint64_t>(fpsNum);
+
+		return static_cast<uint32_t>(bits);
+	}
 }
 
 D3D11NvEncoder_Impl::~D3D11NvEncoder_Impl()
@@ -51,20 +113,43 @@ D3D11NvEncoder_Impl::~D3D11NvEncoder_Impl()
 
 bool D3D11NvEncoder_Impl::Initialize(
 	ID3D11Device* device,
-	uint32_t width,
-	uint32_t height,
-	uint32_t encodeBufferCount,
-	ID3D11ImmediateContextGate* contextGate,
-	bool enableAsyncPipeline)
+	const NvEncConfig& config,
+	ID3D11ImmediateContextGate* contextGate)
 {
 	// encodeBufferCount 가 1 이면 제출 -> 대기 -> 완료가 완전히 직렬화되어
 	// async 파이프라인의 의미가 사라진다. 최소 2 를 요구한다.
-	if (!device || width == 0 || height == 0 ||
-		encodeBufferCount < kMinEncodeBufferCount || !IsPowerOfTwo(encodeBufferCount))
+	if (!device || config.width == 0 || config.height == 0 ||
+		config.encodeBufferCount < kMinEncodeBufferCount || !IsPowerOfTwo(config.encodeBufferCount))
 	{
 		printf_s("[NVENC ERROR] Invalid encoder parameters. width=%u height=%u encodeBufferCount=%u"
 			" (encodeBufferCount must be a power of two and at least %u)\n",
-			width, height, encodeBufferCount, kMinEncodeBufferCount);
+			config.width, config.height, config.encodeBufferCount, kMinEncodeBufferCount);
+		return false;
+	}
+
+	if (config.averageBitrateBps == 0
+		|| config.frameRateNumerator == 0
+		|| config.frameRateDenominator == 0)
+	{
+		printf_s("[NVENC ERROR] Invalid encoder parameters."
+			" bitrate=%u frameRate=%u/%u (all must be non-zero)\n",
+			config.averageBitrateBps, config.frameRateNumerator, config.frameRateDenominator);
+		return false;
+	}
+
+	// maxWidth / maxHeight 는 런타임 해상도 변경의 상한이다.
+	// 지정했다면 현재 해상도보다 작을 수 없다.
+	if ((config.maxWidth > 0 && config.maxWidth < config.width)
+		|| (config.maxHeight > 0 && config.maxHeight < config.height))
+	{
+		printf_s("[NVENC ERROR] maxWidth/maxHeight (%ux%u) must not be smaller than width/height (%ux%u).\n",
+			config.maxWidth, config.maxHeight, config.width, config.height);
+		return false;
+	}
+
+	if (config.enableIntraRefresh && config.intraRefreshPeriodFrames < 2)
+	{
+		printf_s("[NVENC ERROR] intraRefreshPeriodFrames must be at least 2.\n");
 		return false;
 	}
 
@@ -77,10 +162,11 @@ bool D3D11NvEncoder_Impl::Initialize(
 	m_D3D11Device->GetImmediateContext(&m_D3D11Context);
 	m_contextGate = contextGate;
 
-	m_width = width;
-	m_height = height;
-	m_encodeBufferCount = encodeBufferCount;
-	m_asyncPipelineEnabled = enableAsyncPipeline;
+	m_userConfig = config;
+	m_width = config.width;
+	m_height = config.height;
+	m_encodeBufferCount = config.encodeBufferCount;
+	m_asyncPipelineEnabled = config.enableAsyncPipeline;
 
 	m_timeStamp = 0;
 	m_inputSequence = 0;
@@ -521,9 +607,140 @@ bool D3D11NvEncoder_Impl::OpenEncodeSession()
 	return true;
 }
 
+void D3D11NvEncoder_Impl::ApplyStaticConfig(const NvEncConfig& config)
+{
+	// 프리셋 / 튜닝 / 프로파일 / GOP 구조.
+	// 전부 nvEncReconfigureEncoder 로는 바꿀 수 없는 항목이다.
+
+	m_initParameters.presetGUID = ToPresetGuid(config.latencyMode);
+	m_initParameters.tuningInfo = ToTuningInfo(config.latencyMode);
+	m_config.profileGUID = ToProfileGuid(config.profile);
+
+	NV_ENC_CONFIG_H264& h264 = m_config.encodeCodecConfig.h264Config;
+	h264.chromaFormatIDC = 1;
+	h264.repeatSPSPPS = config.repeatSequenceHeader ? 1U : 0U;
+
+	// 스트림에 색공간을 명시한다. 없으면 수신측이 추측하고 색이 틀어진다.
+	// 컨버터가 RGB full range 를 BT.709 로 변환하므로 그에 맞춘다.
+	h264.h264VUIParameters.videoSignalTypePresentFlag = 1;
+	h264.h264VUIParameters.videoFullRangeFlag = 1;
+	h264.h264VUIParameters.colourDescriptionPresentFlag = 1;
+	h264.h264VUIParameters.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+	h264.h264VUIParameters.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+	h264.h264VUIParameters.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+
+	// B 프레임은 쓰지 않는다. 슬롯 하나에 출력 하나를 가정한 링 구조이고,
+	// B 프레임은 NEED_MORE_INPUT 을 유발해 그 가정을 깬다.
+	m_config.frameIntervalP = 1;
+
+	if (config.enableIntraRefresh)
+	{
+		// 주기적 IDR 대신 매 프레임의 일부만 intra 로 인코딩해서
+		// 프레임 크기를 균일하게 만든다. IDR 주기마다 지연이 튀는 것을 없앤다.
+		//
+		// SDK 제약: gopLength 가 NVENC_INFINITE_GOPLENGTH 가 아니면
+		// intra refresh 는 무시된다. idrPeriod 도 같이 무한으로 둬야
+		// 드라이버가 IDR 을 끼워넣지 않는다.
+		m_config.gopLength = NVENC_INFINITE_GOPLENGTH;
+		h264.idrPeriod = NVENC_INFINITE_GOPLENGTH;
+		h264.enableIntraRefresh = 1;
+		h264.intraRefreshPeriod = config.intraRefreshPeriodFrames;
+
+		// intraRefreshCnt 는 intraRefreshPeriod 보다 작아야 한다(SDK).
+		// 한 주기 전체에 걸쳐 퍼뜨려야 프레임당 intra 영역이 가장 작아진다.
+		h264.intraRefreshCnt = (config.intraRefreshPeriodFrames > 1)
+			? config.intraRefreshPeriodFrames - 1U
+			: 1U;
+	}
+	else
+	{
+		// intra refresh 를 쓰지 않으면 gopLength 와 idrPeriod 를 일치시킨다.
+		// 서로 다르면 IDR 이 아닌 I 프레임이 중간에 끼는데, 그 프레임은
+		// IDR 만큼 크면서 신규 수신자의 진입점이 되지 못한다.
+		m_config.gopLength = config.gopLengthFrames;
+		h264.idrPeriod = config.gopLengthFrames;
+		h264.enableIntraRefresh = 0;
+		h264.intraRefreshPeriod = 0;
+		h264.intraRefreshCnt = 0;
+	}
+
+	m_initParameters.encodeGUID = NV_ENC_CODEC_H264_GUID;
+	m_initParameters.encodeWidth = config.width;
+	m_initParameters.encodeHeight = config.height;
+	m_initParameters.darWidth = config.width;
+	m_initParameters.darHeight = config.height;
+	m_initParameters.maxEncodeWidth = (config.maxWidth > 0) ? config.maxWidth : config.width;
+	m_initParameters.maxEncodeHeight = (config.maxHeight > 0) ? config.maxHeight : config.height;
+	m_initParameters.enablePTD = 1;
+	m_initParameters.reportSliceOffsets = 0;
+	m_initParameters.enableSubFrameWrite = 0;
+	m_initParameters.enableMEOnlyMode = false;
+	m_initParameters.enableOutputInVidmem = false;
+	m_initParameters.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+}
+
+void D3D11NvEncoder_Impl::ApplyRateControlConfig(const NvEncConfig& config)
+{
+	// nvEncReconfigureEncoder 로 갱신할 수 있는 항목만 여기서 다룬다.
+
+	m_initParameters.frameRateNum = config.frameRateNumerator;
+	m_initParameters.frameRateDen = config.frameRateDenominator;
+
+	NV_ENC_RC_PARAMS& rc = m_config.rcParams;
+	rc.rateControlMode = ToRateControlMode(config.rateControl);
+	rc.averageBitRate = config.averageBitrateBps;
+	rc.maxBitRate = (config.maxBitrateBps > 0) ? config.maxBitrateBps : config.averageBitrateBps;
+
+	// VBV(HRD) 버퍼는 인코더가 한 번에 몰아 쓸 수 있는 비트 예산이다.
+	// 프리셋 기본값은 프리셋 자신의 비트레이트 기준으로 계산돼 있어서,
+	// averageBitRate 만 덮어쓰면 둘이 어긋난 채로 남는다.
+	// 저지연에서는 1 프레임 분량이 정석이다.
+	rc.vbvBufferSize = (config.vbvBufferSizeBits > 0)
+		? config.vbvBufferSizeBits
+		: ComputeSingleFrameVbvBits(
+			config.averageBitrateBps, config.frameRateNumerator, config.frameRateDenominator);
+	rc.vbvInitialDelay = rc.vbvBufferSize;
+
+	// 단일 프레임 VBV + CBR 에서 I 프레임이 P 프레임 대비 몇 배까지
+	// 비트를 쓸 수 있는지. 1 이면 키프레임도 예산을 넘기지 않아
+	// 키프레임 구간의 지연 스파이크가 사라진다.
+	rc.lowDelayKeyFrameScale = (config.latencyMode == NvEncLatencyMode::UltraLow) ? 1U : 2U;
+
+	rc.enableMinQP = (config.minQP > 0) ? 1U : 0U;
+	rc.enableMaxQP = (config.maxQP > 0) ? 1U : 0U;
+	if (config.minQP > 0)
+		rc.minQP = { config.minQP, config.minQP, config.minQP };
+	if (config.maxQP > 0)
+		rc.maxQP = { config.maxQP, config.maxQP, config.maxQP };
+
+	rc.targetQuality = (config.rateControl == NvEncRateControl::VariableBitrate)
+		? config.targetQuality : 0U;
+
+	if (config.rateControl == NvEncRateControl::ConstantQP)
+		rc.constQP = { config.constantQP, config.constantQP, config.constantQP };
+
+	rc.enableAQ = config.enableAdaptiveQuantization ? 1U : 0U;
+}
+
+bool D3D11NvEncoder_Impl::StaticFieldsDiffer(const NvEncConfig& a, const NvEncConfig& b)
+{
+	return a.width != b.width
+		|| a.height != b.height
+		|| a.maxWidth != b.maxWidth
+		|| a.maxHeight != b.maxHeight
+		|| a.encodeBufferCount != b.encodeBufferCount
+		|| a.enableAsyncPipeline != b.enableAsyncPipeline
+		|| a.latencyMode != b.latencyMode
+		|| a.profile != b.profile
+		|| a.enableIntraRefresh != b.enableIntraRefresh
+		|| a.intraRefreshPeriodFrames != b.intraRefreshPeriodFrames
+		|| a.gopLengthFrames != b.gopLengthFrames
+		|| a.repeatSequenceHeader != b.repeatSequenceHeader;
+}
+
 bool D3D11NvEncoder_Impl::InitializeEncoder()
 {
-	// Encoding 파라메터를 설정 하고 NVENC Encoder 를 생성한다.
+	// 설정을 NVENC 파라메터로 옮기고 Encoder 를 생성한다.
 	if (!m_encoderHandle)
 	{
 		printf_s("[NVENC ERROR] Encoder handle is not initialized.\n");
@@ -533,7 +750,9 @@ bool D3D11NvEncoder_Impl::InitializeEncoder()
 	memset(&m_initParameters, 0, sizeof(m_initParameters));
 	memset(&m_config, 0, sizeof(m_config));
 
-	// 실시간 스트리밍에 적합한 Low Latency Profile 기본 설정값을 가져온다.
+	// 프리셋 기본값을 먼저 깔고 그 위에 우리 설정을 덮는다.
+	// 여기서 채워지는 값 중 우리가 건드리지 않는 것들(모션 추정, 엔트로피 코딩 등)은
+	// 프리셋의 판단을 그대로 쓴다.
 	NV_ENC_PRESET_CONFIG presetConfig = {};
 	presetConfig.version = NV_ENC_PRESET_CONFIG_VER;
 	presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
@@ -541,70 +760,103 @@ bool D3D11NvEncoder_Impl::InitializeEncoder()
 	if (!NVENC_API_CALL(m_nvenc.nvEncGetEncodePresetConfigEx(
 		m_encoderHandle,
 		NV_ENC_CODEC_H264_GUID,
-		NV_ENC_PRESET_P3_GUID,
-		NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY,
+		ToPresetGuid(m_userConfig.latencyMode),
+		ToTuningInfo(m_userConfig.latencyMode),
 		&presetConfig)))
 	{
 		return false;
 	}
 
-	// 프리셋 설정값을 복사
 	memcpy(&m_config, &presetConfig.presetCfg, sizeof(NV_ENC_CONFIG));
 	m_config.version = NV_ENC_CONFIG_VER;
 
-	// 여기서부터는 적절하게 파라메터를 수정한다.
-	// 아래에서 설정하는 파라메터는 실시간 스트리밍에 적합하도록 설정
-
-	// RC
-	m_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_MODE::NV_ENC_PARAMS_RC_CBR;
-	m_config.rcParams.averageBitRate = 5000000;
-	m_config.rcParams.maxBitRate = 5000000;
-
-	// GOP
-	m_config.gopLength = 30;
-	m_config.frameIntervalP = 1;
-
-	// H.264 Config
-	m_config.encodeCodecConfig.h264Config.idrPeriod = 60;
-	m_config.encodeCodecConfig.h264Config.chromaFormatIDC = 1;
-	m_config.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
-	m_config.encodeCodecConfig.h264Config.h264VUIParameters.videoFullRangeFlag = 1;
-	m_config.encodeCodecConfig.h264Config.h264VUIParameters.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
-	m_config.encodeCodecConfig.h264Config.h264VUIParameters.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-	m_config.encodeCodecConfig.h264Config.h264VUIParameters.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
-	m_config.encodeCodecConfig.h264Config.h264VUIParameters.videoSignalTypePresentFlag = 1;
-	m_config.encodeCodecConfig.h264Config.h264VUIParameters.colourDescriptionPresentFlag = 1;
-
-	// Encoder Initialize Parameters
 	m_initParameters.version = NV_ENC_INITIALIZE_PARAMS_VER;
 	m_initParameters.encodeConfig = &m_config;
-	m_initParameters.encodeConfig->version = NV_ENC_CONFIG_VER;
 
+	ApplyStaticConfig(m_userConfig);
+	ApplyRateControlConfig(m_userConfig);
 
-	// H.264 코덱을 사용, AV1 이나 기타 코덱은 추후 개발 예정
-	m_initParameters.encodeGUID = NV_ENC_CODEC_H264_GUID;
-	m_initParameters.presetGUID = NV_ENC_PRESET_P3_GUID;
-	m_initParameters.encodeWidth = m_width;
-	m_initParameters.encodeHeight = m_height;
-	m_initParameters.darWidth = m_width;
-	m_initParameters.darHeight = m_height;
-	m_initParameters.frameRateNum = 30;
-	m_initParameters.frameRateDen = 1;
-	m_initParameters.enablePTD = 1;
-	m_initParameters.reportSliceOffsets = 0;
-	m_initParameters.enableSubFrameWrite = 0;
-	m_initParameters.maxEncodeWidth = m_width;
-	m_initParameters.maxEncodeHeight = m_height;
-	m_initParameters.enableMEOnlyMode = false;
-	m_initParameters.enableOutputInVidmem = false;
+	// async 여부는 하드웨어 지원에 달려 있다. 지원하지 않으면 0 이 되고
+	// completion event 없이 blocking lock 으로 동작한다.
 	m_initParameters.enableEncodeAsync = m_asyncPipelineEnabled
 		? GetCapabilityValue(NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS::NV_ENC_CAPS_ASYNC_ENCODE_SUPPORT)
 		: 0U;
-	m_initParameters.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
-	m_initParameters.tuningInfo = NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY;
 
-	// 위에서 설정된 파라메터로 NVENC Encoder 생성
 	return NVENC_API_CALL(m_nvenc.nvEncInitializeEncoder(m_encoderHandle, &m_initParameters));
+}
+
+NvEncReconfigureResult D3D11NvEncoder_Impl::Reconfigure(const NvEncConfig& config, bool forceIdr)
+{
+	if (!m_encoderHandle || IsFaulted())
+		return NvEncReconfigureResult::NotInitialized;
+
+	if (config.averageBitrateBps == 0
+		|| config.frameRateNumerator == 0
+		|| config.frameRateDenominator == 0)
+	{
+		printf_s("[NVENC ERROR] Reconfigure rejected: bitrate and frame rate must be non-zero.\n");
+		return NvEncReconfigureResult::InvalidConfig;
+	}
+
+	// 동시에 들어오는 Reconfigure 를 직렬화하고, m_userConfig 를 일관되게 읽는다.
+	::AcquireSRWLockExclusive(&m_configLock);
+
+	if (StaticFieldsDiffer(m_userConfig, config))
+	{
+		::ReleaseSRWLockExclusive(&m_configLock);
+		printf_s("[NVENC ERROR] Reconfigure rejected: an init-only field changed."
+			" Resolution, buffer count, latency mode, profile and GOP structure"
+			" require Destroy() then Initialize().\n");
+		return NvEncReconfigureResult::InitOnlyFieldChanged;
+	}
+
+	if (memcmp(&m_userConfig, &config, sizeof(NvEncConfig)) == 0 && !forceIdr)
+	{
+		::ReleaseSRWLockExclusive(&m_configLock);
+		return NvEncReconfigureResult::NoChange;
+	}
+
+	ApplyRateControlConfig(config);
+
+	NV_ENC_RECONFIGURE_PARAMS reconfigureParams = {};
+	reconfigureParams.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+	reconfigureParams.reInitEncodeParams = m_initParameters;
+	reconfigureParams.reInitEncodeParams.encodeConfig = &m_config;
+	reconfigureParams.resetEncoder = 0;
+	reconfigureParams.forceIDR = forceIdr ? 1U : 0U;
+
+	bool applied = false;
+	{
+		// NVENC 는 내부적으로 D3D11 을 만질 수 있고, 이 호출은 엔코드 스레드의
+		// EncodePicture 와 겹칠 수 있다. 게이트로 직렬화한다.
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		applied = NVENC_API_CALL(
+			m_nvenc.nvEncReconfigureEncoder(m_encoderHandle, &reconfigureParams));
+	}
+
+	if (!applied)
+	{
+		// 실패했으면 이전 설정을 파라메터에 되돌려 놓는다.
+		ApplyRateControlConfig(m_userConfig);
+		::ReleaseSRWLockExclusive(&m_configLock);
+		return NvEncReconfigureResult::DriverRejected;
+	}
+
+	m_userConfig = config;
+	::ReleaseSRWLockExclusive(&m_configLock);
+
+	printf_s("[NVENC] Reconfigured. %u bps, %u/%u fps, vbv %u bits%s\n",
+		config.averageBitrateBps, config.frameRateNumerator, config.frameRateDenominator,
+		m_config.rcParams.vbvBufferSize, forceIdr ? ", forced IDR" : "");
+
+	return NvEncReconfigureResult::Applied;
+}
+
+void D3D11NvEncoder_Impl::GetConfig(NvEncConfig& config) const
+{
+	::AcquireSRWLockShared(&m_configLock);
+	config = m_userConfig;
+	::ReleaseSRWLockShared(&m_configLock);
 }
 
 void D3D11NvEncoder_Impl::DestroyEncoder()

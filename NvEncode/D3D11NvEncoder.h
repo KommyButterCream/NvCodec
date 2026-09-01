@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "NvEncConfig.h"
 #include "NvEncPacket.h"
 
 #ifdef BUILD_D3D11_NVIDIA_CODEC_DLL
@@ -35,12 +36,36 @@ public:
 	// Initialize / Destroy 도 내부에서 게이트를 잡는다.
 	bool Initialize(
 		ID3D11Device* device,
+		const NvEncConfig& config,
+		ID3D11ImmediateContextGate* contextGate);
+
+	// 기본 설정으로 초기화하는 짧은 형태.
+	// latencyMode = UltraLow, profile = High, intra refresh 켜짐이 적용된다.
+	bool Initialize(
+		ID3D11Device* device,
 		uint32_t width,
 		uint32_t height,
 		uint32_t encodeBufferCount,
 		ID3D11ImmediateContextGate* contextGate,
 		bool enableAsyncPipeline = true);
+
 	void Destroy();
+
+	// 인코딩 중에 설정을 바꾼다. 네트워크 상황에 맞춘 비트레이트 조정이 주 용도다.
+	//
+	// NvEncConfig 에서 [runtime] 으로 표시된 필드만 바꿀 수 있다.
+	// [init] 필드가 하나라도 달라지면 InitOnlyFieldChanged 를 반환하고
+	// 아무것도 적용하지 않는다. 그 경우 Destroy 후 재초기화해야 한다.
+	//
+	// forceIdr 은 변경 직후 IDR 을 강제한다. 비트레이트만 낮추는 경우라면
+	// false 로 두는 편이 낫다. IDR 은 P 프레임의 몇 배 크기라 혼잡을 악화시킨다.
+	//
+	// 임의의 스레드에서 호출해도 되며 인코딩을 멈추지 않는다.
+	NvEncReconfigureResult Reconfigure(const NvEncConfig& config, bool forceIdr = false);
+
+	// 현재 적용된 설정을 읽는다. Reconfigure 로 일부만 바꿀 때
+	// 이 값을 받아 수정해서 되돌려주는 방식이 안전하다.
+	void GetConfig(NvEncConfig& config) const;
 
 	void SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData);
 

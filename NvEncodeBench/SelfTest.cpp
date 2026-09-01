@@ -356,6 +356,128 @@ namespace Bench
 			return ok;
 		}
 
+		// 네트워크 적응의 핵심 경로: 인코딩 중 비트레이트를 낮추면
+		// 파이프라인을 멈추지 않고 즉시 반영돼야 한다.
+		bool TestReconfigureBitrateWhileEncoding(EncodeBench& bench)
+		{
+			BeginCase("Reconfigure - bitrate changes take effect without stopping the pipeline");
+
+			BenchConfig config;
+			config.width = 1280;
+			config.height = 720;
+			config.frameCount = 400;
+			config.targetFps = 120;
+			config.encodeBufferCount = 4;
+			config.queueFrameCount = 2;
+			config.bitrateBps = 12000000;
+			config.reconfigureAtFrame = 200;
+			config.reconfigureBitrateBps = 2000000;
+
+			BenchResult result = {};
+			bool ok = Check(bench.Run(config, result), "bench run completed");
+
+			ok &= Check(result.reconfigureApplied == 1, "reconfigure was applied");
+			ok &= Check(result.reconfigureRejected == 0, "reconfigure was not rejected");
+			ok &= Check(!result.faultedAtEnd, "encoder did not fault");
+			ok &= Check(result.encoderStats.pendingFrames == 0, "no frames left pending");
+			ok &= Check(result.encoderStats.lostFrames == 0, "no frames lost across the change");
+			ok &= Check(result.encoderStats.completedFrames == result.encoderStats.submittedFrames,
+				"every submitted frame still produced a packet");
+
+			// 12 Mbps -> 2 Mbps 면 평균 프레임 크기가 눈에 띄게 줄어야 한다.
+			const uint64_t afterFrames = result.encodedPackets - result.framesBeforeReconfigure;
+			const uint64_t afterBytes = result.totalBytes - result.bytesBeforeReconfigure;
+			const double beforeAvg = (result.framesBeforeReconfigure > 0)
+				? static_cast<double>(result.bytesBeforeReconfigure)
+					/ static_cast<double>(result.framesBeforeReconfigure)
+				: 0.0;
+			const double afterAvg = (afterFrames > 0)
+				? static_cast<double>(afterBytes) / static_cast<double>(afterFrames)
+				: 0.0;
+
+			ok &= Check(afterFrames > 50, "enough frames were encoded after the change to compare");
+			ok &= Check(afterAvg > 0.0 && afterAvg < beforeAvg * 0.75,
+				"average packet size dropped after lowering the bitrate");
+
+			PrintResult(config, result);
+			EndCase(ok);
+			return ok;
+		}
+
+		// [init] 필드를 바꾸려는 Reconfigure 는 조용히 무시되거나 부분 적용되면 안 된다.
+		// 거절하고 이유를 알려야 한다.
+		bool TestReconfigureRejectsInitOnlyFields(EncodeBench& bench)
+		{
+			BeginCase("Reconfigure - init-only fields are rejected, not partially applied");
+
+			bool ok = true;
+			SimpleContextGate gate;
+
+			NvEncConfig config;
+			config.width = 640;
+			config.height = 480;
+			config.encodeBufferCount = 2;
+			config.averageBitrateBps = 4000000;
+
+			D3D11NvEncoder encoder;
+			ok &= Check(encoder.Initialize(bench.GetDevice(), config, &gate), "encoder initialized");
+
+			// 런타임 필드만 바꾸면 통과해야 한다.
+			NvEncConfig live = {};
+			encoder.GetConfig(live);
+			live.averageBitrateBps = 1500000;
+			ok &= Check(encoder.Reconfigure(live, false) == NvEncReconfigureResult::Applied,
+				"bitrate change is accepted");
+
+			// 같은 값을 다시 넣으면 할 일이 없다.
+			ok &= Check(encoder.Reconfigure(live, false) == NvEncReconfigureResult::NoChange,
+				"an identical config reports NoChange");
+
+			// [init] 필드는 거절돼야 한다.
+			NvEncConfig resized = live;
+			resized.width = 800;
+			ok &= Check(encoder.Reconfigure(resized, false) == NvEncReconfigureResult::InitOnlyFieldChanged,
+				"resolution change is rejected");
+
+			NvEncConfig retuned = live;
+			retuned.latencyMode = NvEncLatencyMode::Quality;
+			ok &= Check(encoder.Reconfigure(retuned, false) == NvEncReconfigureResult::InitOnlyFieldChanged,
+				"latency mode change is rejected");
+
+			NvEncConfig reprofiled = live;
+			reprofiled.profile = NvEncH264Profile::Baseline;
+			ok &= Check(encoder.Reconfigure(reprofiled, false) == NvEncReconfigureResult::InitOnlyFieldChanged,
+				"profile change is rejected");
+
+			NvEncConfig regop = live;
+			regop.enableIntraRefresh = !live.enableIntraRefresh;
+			ok &= Check(encoder.Reconfigure(regop, false) == NvEncReconfigureResult::InitOnlyFieldChanged,
+				"GOP structure change is rejected");
+
+			// 거절 후에도 이전 설정이 그대로여야 한다(부분 적용 금지).
+			NvEncConfig afterRejects = {};
+			encoder.GetConfig(afterRejects);
+			ok &= Check(afterRejects.width == 640 && afterRejects.height == 480,
+				"resolution was left untouched by the rejected calls");
+			ok &= Check(afterRejects.averageBitrateBps == 1500000,
+				"the last accepted bitrate is still in effect");
+			ok &= Check(afterRejects.latencyMode == live.latencyMode
+				&& afterRejects.profile == live.profile
+				&& afterRejects.enableIntraRefresh == live.enableIntraRefresh,
+				"init-only fields were left untouched");
+
+			// 잘못된 값도 거절돼야 한다.
+			NvEncConfig zeroBitrate = live;
+			zeroBitrate.averageBitrateBps = 0;
+			ok &= Check(encoder.Reconfigure(zeroBitrate, false) == NvEncReconfigureResult::InvalidConfig,
+				"a zero bitrate is rejected");
+
+			encoder.Destroy();
+
+			EndCase(ok);
+			return ok;
+		}
+
 		// 같은 하네스 인스턴스로 세션을 반복해 열고 닫는다(재시작 경로).
 		bool TestRepeatedSessions(EncodeBench& bench)
 		{
@@ -416,6 +538,8 @@ namespace Bench
 		TestFaultsAfterSustainedOutputFailure(bench);
 		TestSyncPipeline(bench);
 		TestGateCoversInitAndDestroy(bench);
+		TestReconfigureBitrateWhileEncoding(bench);
+		TestReconfigureRejectsInitOnlyFields(bench);
 		TestEncodeThreadRejectsSyncEncoder(bench);
 		TestRepeatedSessions(bench);
 

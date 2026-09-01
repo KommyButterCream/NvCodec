@@ -25,6 +25,8 @@ NvEncodeBench [bench]       처리량 / 지연 측정 (기본 모드)
 | sync | `DoEncode` 동기 경로가 같은 슬롯 회수 규칙을 따른다 |
 | guard | `EncodeThread` 가 동기 모드 엔코더를 거절한다. 이 조합은 아무도 출력을 드레인하지 않아 조용히 정지한다 |
 | gate | Initialize / Destroy 가 게이트 안에서 돌고(각 1회 / 최대 2회), 게이트를 재귀 획득하지 않는다. 실제 게이트는 SRWLOCK Exclusive 라 재귀 시 데드락한다 |
+| reconfig/1 | 인코딩 중 비트레이트 변경이 파이프라인을 멈추지 않고 반영된다. 12 -> 2 Mbps 에서 평균 패킷이 8.7 -> 1.4 KB, 유실 0 |
+| reconfig/2 | [init] 필드(해상도 / latencyMode / profile / GOP 구조) 변경은 거절되고, 거절 후에도 기존 설정이 부분 적용 없이 그대로 남는다 |
 | repeat | 같은 디바이스로 세션을 반복해 열고 닫아도 매번 전 프레임이 인코딩된다 |
 
 출력 실패는 `D3D11NvEncoder::DebugFailNextOutputs()` 테스트 훅으로 주입한다.
@@ -43,6 +45,15 @@ NvEncodeBench [bench]       처리량 / 지연 측정 (기본 모드)
 --callback-delay N       엔코딩 결과 콜백에서 N 마이크로초 동안 CPU 를 태운다.
                          앱의 브로드캐스트 작업(CPU 바운드)을 흉내내어
                          콜백 비용이 파이프라인에 주는 영향을 재기 위한 것
+--bitrate N              목표 비트레이트(bps)              (기본 5000000)
+--vbv N                  VBV 크기(bit), 0 이면 1 프레임 자동 (기본 0)
+--latency-mode N         0 ultra-low, 1 low, 2 quality     (기본 0)
+--profile N              0 baseline, 1 main, 2 high        (기본 2)
+--intra-refresh N        1 켬, 0 끔(주기적 IDR 사용)        (기본 1)
+--reconfigure-at N       N 번째 프레임에서 비트레이트를 바꾼다
+--reconfigure-bitrate N  ...바꿀 목표 비트레이트(bps)
+--contend-hz N           게이트를 초당 N 회 잡는 가짜 렌더 스레드
+--contend-us N           ...한 번에 N 마이크로초 동안 점유
 --fault-at N             N 번째 프레임에서 출력 실패 주입
 --fault-count N          주입할 실패 횟수
 --csv PATH               프레임별 지연/크기를 CSV 로 저장
@@ -221,6 +232,56 @@ async 는 처리량 여유를 22% 더 준다(740 vs 604 fps). 지연 손실 없�
 
 **주의**: 리포트의 `gate acquisitions ... per submitted frame` 수치에는
 경합 스레드의 획득도 포함된다. `contender acquires` 줄을 빼서 읽어야 한다.
+
+**4-3. 인코더 파라미터: 지연이 아니라 프레임 크기 균일성이 바뀐다.**
+
+P3(VBV) / P4(튜닝) / P5(intra refresh) 를 하나씩 켜며 측정했다.
+지연으로는 효과가 보이지 않았고, **프레임 크기 분포에서 드러났다.**
+
+1080p @60fps, CBR 5 Mbps, 600 프레임:
+
+| 설정 | p50 KB | p99 KB | max KB | max/mean |
+|---|---|---|---|---|
+| vbv 5프레임 + IDR60 + LOW_LATENCY | 6.2 | 39.4 | 45.1 | **4.62** |
+| vbv 1프레임 + IDR60 + LOW_LATENCY | 12.3 | 32.7 | 33.9 | **2.75** |
+| vbv 1프레임 + IDR60 + ULTRA_LOW | 9.2 | 9.9 | 10.4 | **1.13** |
+| vbv 1프레임 + intra refresh + ULTRA_LOW | 6.9 | 14.9 | 14.9 | **1.89** |
+
+포화 처리량(`--fps 0`, 800 프레임):
+
+| 설정 | 처리량 | 키프레임(600프레임 중) |
+|---|---|---|
+| LOW_LATENCY + IDR60 + vbv5f | 769 fps | 10 |
+| LOW_LATENCY + IDR60 + vbv1f | 765 fps | 10 |
+| ULTRA_LOW + IDR60 + vbv1f | **596 fps** | 10 |
+| ULTRA_LOW + intra refresh + vbv1f | **588 fps** | **1** |
+
+항목별로 정리하면:
+
+| 변경 | 프레임 균일성 | 처리량 | 키프레임 이벤트 |
+|---|---|---|---|
+| P3 vbv 5f -> 1f | 4.62 -> 2.75 개선 | 영향 없음 | 10 |
+| P4 LOW -> ULTRA_LOW | 2.75 -> 1.13 크게 개선 | **765 -> 596 fps (-23%)** | 10 |
+| P5 IDR -> intra refresh | 1.13 -> 1.89 소폭 악화 | 영향 없음 | **10 -> 1** |
+
+**하네스가 재는 지연으로는 이 효과가 안 보인다.** 측정 구간이
+큐 투입 -> 콜백 도착이라 네트워크 전송이 빠져 있기 때문이다.
+실제 이득은 전송 구간에 있다. 5 Mbps 링크에서 프레임 하나를 밀어내는 시간은
+
+| 설정 | 최대 프레임 | 5 Mbps 기준 전송 시간 |
+|---|---|---|
+| 변경 전 (vbv 5f + IDR60 + LOW) | 45.1 KB | **73.9 ms** |
+| 변경 후 (vbv 1f + intra refresh + ULTRA_LOW) | 14.9 KB | **24.4 ms** |
+
+최악 전송 시간이 약 3 배 줄어든다. 이것이 이 세 항목의 실제 효과이며,
+이 하네스로는 측정되지 않는다.
+
+**주의할 트레이드**
+- P4 는 처리량을 23% 깎는다. 1080p60 에서는 596 fps 가 필요량의 10 배라 무관하지만,
+  4K 나 다중 스트림에서는 다시 판단해야 한다.
+- P5 는 균일성 지표에서 P4 단독보다 나쁘다. IDR 을 P 프레임 예산에 억지로
+  욱여넣은 P4 쪽 수치와 비교되기 때문이며, 대신 키프레임 이벤트 자체를
+  10 -> 1 로 없앤다. 손실 복구를 큰 IDR 없이 할 수 있다는 것이 P5 의 값어치다.
 
 **5. 게이트 획득이 프레임당 6회.**
 Prepare / Convert / GetEncodedPacket(Lock+Unlock) / Map / Encode / Unmap.

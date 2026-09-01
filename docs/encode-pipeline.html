@@ -168,6 +168,33 @@
     margin-top: 1.4rem;
   }
 
+  .apibox {
+    display: flex;
+    flex-direction: column;
+    gap: .9rem;
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--gate);
+    border-radius: 3px;
+    background: var(--surface);
+    padding: 1.1rem 1.25rem;
+    box-shadow: var(--shadow);
+  }
+  .apibox h3 { margin: 0; }
+
+  pre.code {
+    margin: 0;
+    overflow-x: auto;
+    background: var(--surface-sunk);
+    border: 1px solid var(--rule-soft);
+    border-radius: 3px;
+    padding: .85rem 1rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .82rem;
+    line-height: 1.6;
+    color: var(--ink);
+  }
+  pre.code .cm { color: var(--ink-faint); }
+
   /* ---------- sections ---------- */
 
   section { display: flex; flex-direction: column; gap: 1.15rem; }
@@ -364,8 +391,32 @@
     </div>
   </header>
 
-  <!-- ============ 1. THE SLOT ============ -->
-  <section>
+  <div class="apibox">
+    <h3>앱이 만지는 것</h3>
+    <p>
+      DLL 이 내보내는 클래스는 넷뿐이다 — <code>D3D11NvEncoder</code>,
+      <code>EncodeFrameQueue</code>, <code>D3D11NvDecoder</code>, <code>DecodeFrameQueue</code>.
+      아래 나오는 스레드들은 전부 코덱이 내부에서 소유하고, NVENC 와 CUDA 헤더는 밖으로 새지 않는다.
+    </p>
+<pre class="code">D3D11NvEncoder encoder;
+encoder.Initialize(device, config, gate);
+encoder.SetEncodedPacketCallback(OnPacket, this);  <span class="cm">// 결과는 여기로 온다</span>
+
+EncodeFrameQueue queue;
+queue.Initialize(2, OnReleaseSourceFrame, this);
+encoder.StartEncodeThread(&amp;queue);                 <span class="cm">// 큐 펌프 가동</span>
+
+queue.EnqueueLatest(handle, forceKeyFrame);        <span class="cm">// 프레임 투입</span>
+<span class="cm">// ...</span>
+encoder.Destroy();                                 <span class="cm">// 펌프도 같이 멈춘다</span></pre>
+    <p>
+      동기 인코딩은 <code>StartEncodeThread</code> 를 부르지 않고
+      <code>PrepareFrameForEncode</code> + <code>DoEncode</code> 를 직접 돌린다.
+      섹션 07 에서 그 차이를 다룬다.
+    </p>
+  </div>
+
+  <!-- ============ 1. THE SLOT ============ -->  <section>
     <div class="sechead"><span class="secnum">01</span><h2>The slot is the unit of everything</h2></div>
 
     <p>
@@ -879,7 +930,7 @@
           <tr><td><code>nvEncEncodePicture</code></td><td>returns immediately</td><td>blocks</td></tr>
           <tr><td>Result delivery</td><td><code>EncodedPacketCallback</code></td><td><code>DoEncode</code> out-param</td></tr>
           <tr><td>Pipeline depth</td><td>up to N</td><td>always 1</td></tr>
-          <tr><td><code>EncodeThread</code></td><td>required</td><td><strong>rejected at Initialize</strong></td></tr>
+          <tr><td><code>StartEncodeThread</code></td><td>required</td><td><strong>rejected</strong></td></tr>
           <tr><td>Measured, 1080p</td><td class="num">740 fps · p50 5.08 ms @ N=4</td><td class="num">604 fps · p50 1.64 ms</td></tr>
           <tr><td>At 60 fps</td><td class="num">p50 3.682 ms</td><td class="num">p50 3.691 ms</td></tr>
         </tbody>
@@ -983,6 +1034,16 @@
       <span class="lanechip a">App (Acquire → render → Release)</span>
       <span class="lanechip g">holds the context gate</span>
     </div>
+<pre class="code">D3D11NvDecoder decoder;
+decoder.Initialize(device, config, gate);
+decoder.SetFrameCallback(OnFrame, this);   <span class="cm">// frame 은 콜백 반환까지만 유효</span>
+
+DecodeFrameQueue queue(slotBytes, slotCount);
+decoder.StartDecodeThread(&amp;queue);         <span class="cm">// 큐 펌프 가동</span>
+
+queue.EnqueueFrame(packet);                <span class="cm">// 비트스트림 투입</span>
+<span class="cm">// ...</span>
+decoder.Destroy();                         <span class="cm">// 펌프도 같이 멈춘다</span></pre>
   </div>
 
   <!-- ============ 9. THE CONTRACT ============ -->
@@ -1142,7 +1203,7 @@
         <div class="step-fn">ReleaseFrame</div>
         <div class="step-body">
           앱이 다 쓰면 슬롯이 풀린다. <em>이걸 빼먹으면 그 슬롯은 영구히 묶인다.</em>
-          <code>DecodeThread</code> 를 쓰면 콜백 반환 직후 자동으로 불러준다.
+          <code>StartDecodeThread</code> 로 큐 펌프를 쓰면 콜백 반환 직후 자동으로 불러준다.
         </div>
       </div>
     </div>
@@ -1362,7 +1423,7 @@
   <footer>
     <div>
       <code>Module/NvCodec/NvEncode/</code> — <code>D3D11NvEncoder_Impl.cpp</code>,
-      <code>EncodeThread_Impl.cpp</code>, <code>EncodeCompletionThread.cpp</code>,
+      <code>EncodeThread.cpp</code>, <code>EncodeCompletionThread.cpp</code>,
       <code>EncodeFrameQueue.cpp</code>, <code>D3D11VideoProcessorNV12.cpp</code>
     </div>
     <div>
@@ -1371,7 +1432,7 @@
     </div>
     <div>
       <code>Module/NvCodec/NvDecode/</code> — <code>D3D11NvDecoder_Impl.cpp</code>,
-      <code>DecodeThread_Impl.cpp</code>, <code>DecodeFrameQueue.cpp</code>, <code>NvDecConfig.h</code>
+      <code>DecodeThread.cpp</code>, <code>DecodeFrameQueue.cpp</code>, <code>NvDecConfig.h</code>
     </div>
     <div>
       Round trip harness: <code>NvEncodeBench.exe roundtrip</code> ·

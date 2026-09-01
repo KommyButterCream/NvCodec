@@ -328,7 +328,7 @@ void D3D11NvEncoder_Impl::Destroy()
 
 	if (m_encodeCompletionThread)
 	{
-		StopEncodeCompletionThread();
+		DestroyEncodeCompletionThread();
 	}
 	else if (!Flush() && !IsFaulted())
 	{
@@ -494,7 +494,7 @@ bool D3D11NvEncoder_Impl::SubmitFrame(uint64_t frameId)
 			::SetEvent(m_allSlotsFreeEvent);
 	}
 
-	// 완료 스레드 객체 포인터를 만지지 않는다. 그 포인터는 StopEncodeCompletionThread
+	// 완료 스레드 객체 포인터를 만지지 않는다. 그 포인터는 DestroyEncodeCompletionThread
 	// 가 지우므로 여기서 역참조하면 UAF 창이 생긴다. 이벤트는 엔코더 수명 전체 유효.
 	if (m_frameSubmittedEvent)
 		::SetEvent(m_frameSubmittedEvent);
@@ -1414,7 +1414,7 @@ bool D3D11NvEncoder_Impl::InitializeEncodeCompletionThread()
 	return true;
 }
 
-void D3D11NvEncoder_Impl::StopEncodeCompletionThread()
+void D3D11NvEncoder_Impl::DestroyEncodeCompletionThread()
 {
 	::InterlockedExchange(&m_acceptFrames, FALSE);
 
@@ -1939,21 +1939,6 @@ bool D3D11NvEncoder_Impl::UnmapInputResource(uint32_t slot)
 
 	return true;
 }
-
-//void SimpleNvEncoderD3D11::Reconfigure(uint32_t bitrate)
-//{
-//    m_config.rcParams.averageBitRate = bitrate;
-//
-//    NV_ENC_RECONFIGURE_PARAMS params = {
-//        NV_ENC_RECONFIGURE_PARAMS_VER
-//    };
-//    params.reInitEncodeParams = m_initParams;
-//    params.reInitEncodeParams.encodeConfig = &m_config;
-//
-//    NVENC_API_CALL(
-//        m_nvenc.nvEncReconfigureEncoder(m_encoderHandle, &params)
-//    );
-//}
 
 int32_t D3D11NvEncoder_Impl::GetCapabilityValue(GUID guidCodec, NV_ENC_CAPS capsToQuery)
 {

@@ -920,10 +920,10 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 		goto cleanup;
 	}
 
-	//if (!CUDA_DRVAPI_CALL(cuStreamSynchronize(m_cuStream))) // GPU 작업 완료 대기
-	//{
-	//    return -1;
-	//}
+	// 여기서 스트림을 동기화하지 않는다. 그러면 디코드 스레드가 매 프레임
+	// GPU 변환·복사가 끝날 때까지 놀게 된다. 대기는 프레임이 실제로 필요한
+	// AcquireFrame 으로 미뤄 두었고, 그 지점이 m_decodeCompleteEvents 를 기다린다.
+	// 이것이 이 디코더의 async 구조다 — 엔코더의 완료 이벤트와 같은 역할이다.
 
 	// 페이로드를 먼저 쓰고 시퀀스를 올린다. InterlockedIncrement 가 full barrier 라
 	// 이 순서는 컴파일러도 CPU 도 뒤집지 못한다 — 소비자가 시퀀스를 본 시점에

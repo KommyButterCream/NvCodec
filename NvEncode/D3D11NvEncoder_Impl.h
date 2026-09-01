@@ -146,7 +146,7 @@ private:
 	bool InitializePendingFrames();
 	void DestroyPendingFrames();
 	bool InitializeEncodeCompletionThread();
-	void StopEncodeCompletionThread();
+	void DestroyEncodeCompletionThread();
 	NvEncOutputResult ProcessOneOutput(bool block, bool invokeCallback, NvEncPacket* outPacket = nullptr);
 	void ClearPendingFrame(uint32_t slot);
 	void AbortPendingFrames();

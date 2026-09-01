@@ -33,4 +33,10 @@ struct NvEncStats
 	uint64_t lostFrames = 0;        // 제출됐지만 결과를 못 받은 횟수
 	uint32_t pendingFrames = 0;     // NVENC 에 제출됐고 아직 회수하지 않은 프레임 수
 	bool faulted = false;           // 파이프라인 정지 여부
+
+	// 큐에서 꺼냈지만 인코더에 넣지 못한 프레임. 인코드 스레드를 쓸 때만 채워진다.
+	// EncodeFrameQueue::GetDropCount 는 enqueue 측 드롭만 세므로 여기서 따로 센다.
+	uint64_t droppedNoEncoderSlot = 0;  // 제출 시점에 빈 슬롯이 없었다
+	uint64_t droppedPrepareFailed = 0;  // NV12 변환/매핑 실패
+	uint64_t droppedSubmitFailed = 0;   // SubmitFrame 실패
 };

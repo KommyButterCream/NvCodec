@@ -1,12 +1,13 @@
 ﻿#include "pch.h"
 #include "D3D11NvDecoder_Impl.h"
 
+#include "DecodeThread.h"
+
 #include <cudaD3D11.h>
 #include <malloc.h>
 #include <stdio.h> // for printf_s, fopen_s, fwrite
 #include <math.h>
 
-#include <optional>
 
 #include "../../D3D11EngineInterface/ID3D11ImmediateContextGate.h"
 #include "ColorSpaceCuda.cuh"
@@ -226,6 +227,9 @@ bool D3D11NvDecoder_Impl::Initialize(
 
 void D3D11NvDecoder_Impl::Destroy()
 {
+	// 큐 펌프를 먼저 멈춘다. 이게 살아 있으면 해체 중인 파서로 패킷이 계속 들어온다.
+	StopDecodeThread();
+
 	// 파서를 먼저 없애야 이후 콜백이 들어오지 않는다.
 	if (m_parser)
 	{
@@ -473,6 +477,57 @@ void D3D11NvDecoder_Impl::ReleaseFrame(Frame* frame)
 	::InterlockedDecrement(&m_framesHeldByApp);
 }
 
+bool D3D11NvDecoder_Impl::StartDecodeThread(DecodeFrameQueue* queue)
+{
+	if (!queue)
+	{
+		return false;
+	}
+
+	StopDecodeThread();
+
+	m_decodeThread = new (std::nothrow) DecodeThread();
+	if (!m_decodeThread)
+	{
+		return false;
+	}
+
+	m_decodeThread->SetFrameCallback(m_pendingFrameCallback, m_pendingFrameCallbackUserData);
+
+	if (!m_decodeThread->Initialize(queue, this))
+	{
+		delete m_decodeThread;
+		m_decodeThread = nullptr;
+		return false;
+	}
+
+	return true;
+}
+
+void D3D11NvDecoder_Impl::StopDecodeThread()
+{
+	if (!m_decodeThread)
+	{
+		return;
+	}
+
+	m_decodeThread->Shutdown();
+	delete m_decodeThread;
+	m_decodeThread = nullptr;
+}
+
+void D3D11NvDecoder_Impl::SetFrameCallback(D3D11NvDecoder::FrameCallback callback, void* userData)
+{
+	// 스레드가 아직 없으면 기억해 뒀다가 StartDecodeThread 에서 넘긴다.
+	m_pendingFrameCallback = callback;
+	m_pendingFrameCallbackUserData = userData;
+
+	if (m_decodeThread)
+	{
+		m_decodeThread->SetFrameCallback(callback, userData);
+	}
+}
+
 void D3D11NvDecoder_Impl::SetErrorCallback(ErrorCallback callback, void* userData)
 {
 	::AcquireSRWLockExclusive(&m_callbackLock);
@@ -545,6 +600,12 @@ void D3D11NvDecoder_Impl::GetStats(NvDecStats& stats) const
 	stats.framesHeldByApp = static_cast<uint32_t>(
 		::ReadAcquire(&m_framesHeldByApp));
 	stats.faulted = IsFaulted();
+
+	// 큐 펌프를 쓰지 않으면 packetsFailed 는 0 으로 남는다.
+	if (m_decodeThread)
+	{
+		m_decodeThread->FillStats(stats);
+	}
 }
 
 int32_t CUDAAPI D3D11NvDecoder_Impl::HandleVideoSequence(void* userData, CUVIDEOFORMAT* format)
@@ -759,9 +820,9 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	CUarray cuArrayTexture = nullptr;
 	CUDA_MEMCPY2D copy = {};
 
-	// goto 로 건너뛰는 구간에 생성자가 있는 지역 객체를 둘 수 없으므로
-	// 게이트 가드는 optional 로 두고 필요한 시점에 열어 준다.
-	std::optional<D3D11ImmediateContextGuard> contextGuard;
+	// goto 로 건너뛰는 구간에 생성자가 있는 지역 객체를 둘 수 없다.
+	// 이 함수가 이미 쓰는 mapped* 플래그와 같은 방식으로 게이트도 직접 여닫는다.
+	bool gateEntered = false;
 
 	if (!NVDEC_API_CALL(cuvidCtxLock(m_ctxLock, 0)))
 	{
@@ -803,7 +864,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 
 	// 여기부터 cleanup 까지 D3D11 리소스를 CUDA 에 매핑한 상태다.
 	// 커널 실행과 memcpy 는 스트림에 실리는 비동기 명령이라 게이트를 오래 잡지 않는다.
-	contextGuard.emplace(m_contextGate);
+	gateEntered = (m_contextGate != nullptr) && m_contextGate->Enter();
 
 	// 사전에 등록된 D3D11Texture2D 에 Map
 	if (!CUDA_DRVAPI_CALL(cuGraphicsMapResources(1, &m_cudaResources[slot], m_cuStream)))
@@ -888,6 +949,12 @@ cleanup:
 	}
 
 	NVDEC_API_CALL(cuvidCtxUnlock(m_ctxLock, 0));
+
+	if (gateEntered)
+	{
+		m_contextGate->Leave();
+	}
+
 	return result;
 }
 

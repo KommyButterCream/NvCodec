@@ -13,6 +13,7 @@ struct ID3D11Device;
 struct ID3D11Texture2D;
 class ID3D11ImmediateContextGate;
 class D3D11NvEncoder_Impl;
+class EncodeFrameQueue;
 
 class D3D11_NVIDIA_ENCODER_API D3D11NvEncoder
 {
@@ -86,6 +87,20 @@ public:
 	// 복구하려면 Destroy 후 다시 Initialize 해야 한다.
 	bool IsFaulted() const;
 	void GetStats(NvEncStats& stats) const;
+
+	// 큐에서 프레임을 꺼내 이 엔코더에 밀어 넣는 워커를 시작한다.
+	// 인코딩 결과는 SetEncodedPacketCallback 으로 등록한 콜백에 그대로 도착한다.
+	// async 파이프라인이 켜진 엔코더에서만 동작한다 — 동기 모드는 아무도 출력을
+	// 회수하지 않아 정지하므로 거절한다. 동기 인코딩은 PrepareFrameForEncode +
+	// DoEncode 를 호출자가 직접 돌린다.
+	//
+	// Destroy 가 자동으로 멈추므로 종료 순서를 신경 쓸 필요가 없다.
+	bool StartEncodeThread(EncodeFrameQueue* queue);
+	void StopEncodeThread();
+
+	// 매 프레임 '이번 것을 키프레임으로 할까' 를 묻는다. 큐 펌프가 호출한다.
+	using KeyFrameRequestCallback = bool (*)(void* userData);
+	void SetKeyFrameRequestCallback(KeyFrameRequestCallback callback, void* userData);
 
 	// 테스트 전용 훅. 다음 count 번의 비트스트림 회수를 강제로 실패시킨다.
 	// 출력 실패 복구 경로를 검증하기 위한 것으로 운영 코드에서 호출하지 않는다.

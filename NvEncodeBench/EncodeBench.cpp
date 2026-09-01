@@ -318,7 +318,7 @@ namespace Bench
 			impl->ReleaseSlot(static_cast<int32_t>(frameHandle.sourceSlotId));
 	}
 
-	void EncodeBench::OnEncodedFrame(const EncodeThread::EncodedFrame& frame, void* userData)
+	void EncodeBench::OnEncodedFrame(const NvEncPacket& packet, void* userData)
 	{
 		Impl* impl = static_cast<Impl*>(userData);
 		if (!impl)
@@ -326,7 +326,7 @@ namespace Bench
 
 		// 시각을 먼저 찍는다. 그래야 측정된 지연이 인위적 콜백 지연으로
 		// 자동 부풀려지지 않고, 파이프라인이 패킷을 전달한 시점을 뜻한다.
-		impl->RecordPacket(frame.frameId, frame.size, frame.isKeyFrame);
+		impl->RecordPacket(packet.frameId, packet.size, packet.isKeyFrame);
 		impl->SpinCallbackDelay();
 	}
 
@@ -540,12 +540,11 @@ namespace Bench
 			return false;
 		}
 
-		EncodeThread encodeThread;
-		// 콜백은 스레드를 띄우기 전에 설정한다.
-		encodeThread.SetEncodedFrameCallback(OnEncodedFrame, m_impl);
-		if (!encodeThread.Initialize(&queue, &encoder))
+		// 결과 콜백은 엔코더에 직접 등록한다. 큐 펌프를 띄우기 전에 걸어 둔다.
+		encoder.SetEncodedPacketCallback(OnEncodedFrame, m_impl);
+		if (!encoder.StartEncodeThread(&queue))
 		{
-			printf_s("[BENCH ERROR] EncodeThread Initialize failed.\n");
+			printf_s("[BENCH ERROR] StartEncodeThread failed.\n");
 			return false;
 		}
 
@@ -558,7 +557,7 @@ namespace Bench
 			// 스로틀이 없으면 앞서 넣은 프레임이 모두 인코더에 제출되고
 			// 빈 슬롯이 생길 때까지 기다린다.
 			//
-			// 큐 소비 카운트로는 게이팅할 수 없다. EncodeThread 는 인코더
+			// 큐 소비 카운트로는 게이팅할 수 없다. 큐 펌프는 인코더
 			// 슬롯이 없으면 프레임을 버리면서도 ReleaseReadFrame 으로
 			// "처리됨"으로 세기 때문에, 큐 기준으로는 전부 소비된 것처럼 보인다.
 			// 제출 카운트를 봐야 실제로 인코딩된 프레임만 남는다.
@@ -656,8 +655,7 @@ namespace Bench
 
 		encoder.WaitForPendingFrames(5000U);
 
-		encodeThread.GetStats(result.threadStats);
-		encodeThread.Shutdown();
+		encoder.StopEncodeThread();
 
 		result.queueDropCount = queue.GetDropCount();
 		result.queueProcessCount = queue.GetProcessCount();
@@ -743,20 +741,20 @@ namespace Bench
 		printf_s(" queue dropped / proc : %u / %u\n",
 			result.queueDropCount, result.queueProcessCount);
 
-		// EncodeThread 가 큐에서 꺼냈지만 인코더에 넣지 못한 프레임.
-		// 큐의 dropCount 에는 잡히지 않아 EncodeThread 가 직접 센다.
+		// 큐에서 꺼냈지만 인코더에 넣지 못한 프레임.
+		// 큐의 dropCount 에는 잡히지 않아 NvEncStats 에 따로 잡힌다.
 		if (config.asyncPipeline)
 		{
 			printf_s(" enc thread submitted : %llu\n",
-				static_cast<unsigned long long>(result.threadStats.framesSubmitted));
+				static_cast<unsigned long long>(result.encoderStats.submittedFrames));
 			printf_s(" dropped, no enc slot : %llu\n",
-				static_cast<unsigned long long>(result.threadStats.framesDroppedNoEncoderSlot));
-			if (result.threadStats.framesDroppedPrepareFailed > 0
-				|| result.threadStats.framesDroppedSubmitFailed > 0)
+				static_cast<unsigned long long>(result.encoderStats.droppedNoEncoderSlot));
+			if (result.encoderStats.droppedPrepareFailed > 0
+				|| result.encoderStats.droppedSubmitFailed > 0)
 			{
 				printf_s(" dropped, prep/submit : %llu / %llu\n",
-					static_cast<unsigned long long>(result.threadStats.framesDroppedPrepareFailed),
-					static_cast<unsigned long long>(result.threadStats.framesDroppedSubmitFailed));
+					static_cast<unsigned long long>(result.encoderStats.droppedPrepareFailed),
+					static_cast<unsigned long long>(result.encoderStats.droppedSubmitFailed));
 			}
 		}
 

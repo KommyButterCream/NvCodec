@@ -10,7 +10,7 @@
 
 #include "LatencyStats.h"
 #include "../NvEncode/EncodeFrameQueue.h"
-#include "../NvEncode/EncodeThread.h"
+#include "../NvEncode/NvEncPacket.h"
 #include "../NvEncode/NvEncConfig.h"
 #include "../NvEncode/NvEncPacket.h"
 
@@ -35,7 +35,7 @@ namespace Bench
 		uint32_t sourcePoolCount = 8;     // 생산자 텍스처 풀 크기(= 패턴 종류 수)
 		uint32_t keyFrameInterval = 0;    // 0 이면 키프레임 요청 안 함
 
-		// false 면 EncodeThread 없이 호출 스레드에서 DoEncode 로 동기 인코딩한다.
+		// false 면 큐 펌프 없이 호출 스레드에서 DoEncode 로 동기 인코딩한다.
 		bool asyncPipeline = true;
 
 		// 콜백에서 소비하는 CPU 시간을 인위적으로 만든다(마이크로초).
@@ -91,7 +91,6 @@ namespace Bench
 		uint32_t queueProcessCount = 0;
 
 		NvEncStats encoderStats = {};
-		EncodeThread::Stats threadStats = {};
 		bool faultedAtEnd = false;
 		uint32_t errorCounts[8] = {};     // NvEncErrorCode 별 통지 횟수
 
@@ -139,7 +138,7 @@ namespace Bench
 		bool RunSync(const BenchConfig& config, BenchResult& result, D3D11NvEncoder& encoder);
 
 		static void OnReleaseFrame(EncodeFrameQueue::InputFrameHandle& frameHandle, void* userData);
-		static void OnEncodedFrame(const EncodeThread::EncodedFrame& frame, void* userData);
+		static void OnEncodedFrame(const NvEncPacket& packet, void* userData);
 		static void OnEncoderError(NvEncErrorCode errorCode, void* userData);
 
 	private:

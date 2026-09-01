@@ -10,7 +10,7 @@
 namespace Bench
 {
 	// D3D11 Immediate Context 는 스레드 세이프하지 않다.
-	// async 파이프라인에서는 EncodeThread(Prepare/Convert/Map/Encode)와
+	// async 파이프라인에서는 큐 펌프(Prepare/Convert/Map/Encode)와
 	// EncodeCompletionThread(Unmap)가 동시에 컨텍스트를 만지므로
 	// 게이트를 반드시 넘겨야 한다.
 	class SimpleContextGate final : public ID3D11ImmediateContextGate

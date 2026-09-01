@@ -1,34 +1,53 @@
-﻿#pragma once
+#pragma once
+
+#include "../../Core/Concurrency/ThreadBase.h"
 
 #include "D3D11NvDecoder.h"
 
+class D3D11NvDecoder_Impl;
 class DecodeFrameQueue;
-class DecodeThread_Impl;
 
-class D3D11_NVIDIA_DECODER_API DecodeThread
+// 큐에서 패킷을 꺼내 디코더에 먹이고, 나온 프레임을 콜백으로 넘기는 워커.
+//
+// DLL 내부 전용이다. 예전에는 공개 클래스라 pimpl 로 나뉘어 있었지만,
+// 지금은 D3D11NvDecoder 가 소유하고 StartDecodeThread 로 시작한다.
+//
+// AcquireFrame 으로 받은 프레임은 콜백이 반환하는 즉시 ReleaseFrame 으로
+// 반납한다. 콜백 밖으로 텍스처를 들고 나가려면 이 스레드를 쓰지 말고
+// 앱이 직접 AcquireFrame / ReleaseFrame 을 호출해야 한다.
+class DecodeThread final : public Core::Concurrency::ThreadBase
 {
 public:
-	// 큐에서 꺼낸 패킷이 어디서 사라졌는지 구분하기 위한 통계.
-	struct Stats
-	{
-		uint64_t packetsParsed = 0;
-		uint64_t packetsFailed = 0;
-		uint64_t framesDelivered = 0;
-	};
-
-	// frame 은 콜백이 반환할 때까지만 유효하다.
-	// 콜백 밖으로 텍스처를 들고 나가려면 이 스레드 대신
-	// D3D11NvDecoder::AcquireFrame / ReleaseFrame 을 직접 써야 한다.
-	using FrameCallback = void (*)(const D3D11NvDecoder::Frame& frame, void* userData);
+	using FrameCallback = D3D11NvDecoder::FrameCallback;
 
 	DecodeThread();
 	~DecodeThread();
 
-	bool Initialize(DecodeFrameQueue* queue, D3D11NvDecoder* decoder);
+	DecodeThread(const DecodeThread&) = delete;
+	DecodeThread& operator=(const DecodeThread&) = delete;
+
+	bool Initialize(DecodeFrameQueue* queue, D3D11NvDecoder_Impl* decoder);
 	void Shutdown();
+
 	void SetFrameCallback(FrameCallback callback, void* userData);
-	void GetStats(Stats& stats) const;
+
+	// 큐에서 꺼냈지만 디코딩되지 않은 패킷 수를 채운다.
+	// 나머지 필드는 건드리지 않는다 — 디코더가 자기 값을 이미 채웠다.
+	void FillStats(NvDecStats& stats) const;
 
 private:
-	DecodeThread_Impl* m_impl = nullptr;
+	void Run() override;
+
+	// 콜백을 잠금 아래에서 호출한다. 호출 중에 userData 가 교체되지 않도록.
+	void DispatchFrame(const D3D11NvDecoder::Frame& frame);
+
+private:
+	DecodeFrameQueue* m_decodeFrameQueue = nullptr;
+	D3D11NvDecoder_Impl* m_decoder = nullptr;
+
+	FrameCallback m_frameCallback = nullptr;
+	void* m_frameCallbackUserData = nullptr;
+	mutable SRWLOCK m_callbackLock = SRWLOCK_INIT;
+
+	alignas(8) volatile LONG64 m_packetsFailedCount = 0;
 };

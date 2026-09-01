@@ -3,6 +3,7 @@
 #include "../../D3D11EngineInterface/ID3D11ImmediateContextGate.h"
 #include "D3D11VideoProcessorNV12.h"
 #include "EncodeCompletionThread.h"
+#include "EncodeThread.h"
 
 #include <new> // for std::nothrow
 #include <stdio.h> // for printf_s, fopen_s, fwrite
@@ -318,6 +319,11 @@ fail_device:
 
 void D3D11NvEncoder_Impl::Destroy()
 {
+	// 큐 펌프를 먼저 멈춘다. 이게 사라져야 새 프레임이 들어오지 않는다.
+	// 예전에는 앱이 EncodeThread::Shutdown 을 Destroy 보다 먼저 부를 책임을 졌고,
+	// 순서를 틀리면 스레드가 해제된 엔코더를 만졌다.
+	StopEncodeThread();
+
 	::InterlockedExchange(&m_acceptFrames, FALSE);
 
 	if (m_encodeCompletionThread)
@@ -543,6 +549,58 @@ void D3D11NvEncoder_Impl::GetStats(NvEncStats& stats) const
 		::ReadAcquire64(&m_lostFrameCount));
 	stats.pendingFrames = GetPendingFrameCount();
 	stats.faulted = IsFaulted();
+
+	// 큐 펌프를 쓰지 않으면 이 값들은 0 으로 남는다.
+	if (m_encodeThread)
+	{
+		m_encodeThread->FillStats(stats);
+	}
+}
+
+bool D3D11NvEncoder_Impl::StartEncodeThread(EncodeFrameQueue* queue)
+{
+	if (!queue)
+	{
+		return false;
+	}
+
+	StopEncodeThread();
+
+	m_encodeThread = new (std::nothrow) EncodeThread();
+	if (!m_encodeThread)
+	{
+		return false;
+	}
+
+	if (!m_encodeThread->Initialize(queue, this))
+	{
+		delete m_encodeThread;
+		m_encodeThread = nullptr;
+		return false;
+	}
+
+	return true;
+}
+
+void D3D11NvEncoder_Impl::StopEncodeThread()
+{
+	if (!m_encodeThread)
+	{
+		return;
+	}
+
+	// 소멸자가 Shutdown 을 부르지만, 통계를 마지막으로 한 번 걷어둔다.
+	m_encodeThread->Shutdown();
+	delete m_encodeThread;
+	m_encodeThread = nullptr;
+}
+
+void D3D11NvEncoder_Impl::SetKeyFrameRequestCallback(bool (*callback)(void*), void* userData)
+{
+	if (m_encodeThread)
+	{
+		m_encodeThread->SetKeyFrameRequestCallback(callback, userData);
+	}
 }
 
 void D3D11NvEncoder_Impl::DebugFailNextOutputs(uint32_t count)

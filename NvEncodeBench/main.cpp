@@ -29,7 +29,7 @@ namespace
 			"  --queue N            queue slots, power of two >= 2     (default 4)\n"
 			"  --pool N             source texture pool size          (default 8)\n"
 			"  --keyframe N         request a keyframe every N frames (default 0 = off)\n"
-			"  --sync               use DoEncode on this thread instead of EncodeThread\n"
+			"  --sync               use DoEncode on this thread instead of the queue pump\n"
 			"  --callback-delay N   burn N microseconds of CPU inside the encoded-frame\n"
 			"                       callback, simulating the broadcast work   (default 0)\n"
 			"  --bitrate N          target bitrate in bps            (default 5000000)\n"

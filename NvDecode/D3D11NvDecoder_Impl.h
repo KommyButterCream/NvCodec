@@ -15,6 +15,8 @@ struct ID3D11Texture2D;
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 class ID3D11ImmediateContextGate;
+class DecodeFrameQueue;
+class DecodeThread;
 
 class D3D11NvDecoder_Impl
 {
@@ -78,6 +80,10 @@ public:
 	void ReleaseFrame(Frame* frame);
 
 	void SetErrorCallback(ErrorCallback callback, void* userData);
+
+	bool StartDecodeThread(DecodeFrameQueue* queue);
+	void StopDecodeThread();
+	void SetFrameCallback(D3D11NvDecoder::FrameCallback callback, void* userData);
 	void GetStats(NvDecStats& stats) const;
 	bool IsFaulted() const;
 
@@ -121,6 +127,14 @@ private:
 	ID3D11Device* m_D3D11Device = nullptr;
 	ID3D11DeviceContext* m_D3D11Context = nullptr;
 	ID3D11ImmediateContextGate* m_contextGate = nullptr;
+
+	// 큐 펌프. 앱이 StartDecodeThread 를 부를 때만 생성된다.
+	// 직접 Parse / AcquireFrame 을 돌리는 앱에서는 nullptr 로 남는다.
+	DecodeThread* m_decodeThread = nullptr;
+
+	// StartDecodeThread 이전에 SetFrameCallback 이 불릴 수 있다.
+	D3D11NvDecoder::FrameCallback m_pendingFrameCallback = nullptr;
+	void* m_pendingFrameCallbackUserData = nullptr;
 
 	CUdevice m_cudaDevice = 0;
 	CUcontext m_cudaContext = nullptr;

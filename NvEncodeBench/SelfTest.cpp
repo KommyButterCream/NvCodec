@@ -309,11 +309,11 @@ namespace Bench
 			return ok;
 		}
 
-		// EncodeThread 는 출력을 회수하지 않으므로 동기 모드 엔코더와 조합하면
+		// 큐 펌프는 출력을 회수하지 않으므로 동기 모드 엔코더와 조합하면
 		// 아무도 드레인하지 않아 파이프라인이 조용히 정지한다. 초기화 단계에서 거절돼야 한다.
-		bool TestEncodeThreadRejectsSyncEncoder(EncodeBench& bench)
+		bool TestStartEncodeThreadRejectsSyncEncoder(EncodeBench& bench)
 		{
-			BeginCase("EncodeThread rejects a sync-mode encoder (nothing would drain it)");
+			BeginCase("StartEncodeThread rejects a sync-mode encoder (nothing would drain it)");
 
 			bool ok = true;
 			ID3D11Device* device = bench.GetDevice();
@@ -331,9 +331,8 @@ namespace Bench
 				ok &= Check(!syncEncoder.IsAsyncPipelineEnabled(),
 					"encoder reports the async pipeline is off");
 
-				EncodeThread encodeThread;
-				ok &= Check(!encodeThread.Initialize(&queue, &syncEncoder),
-					"EncodeThread refused the sync-mode encoder");
+				ok &= Check(!syncEncoder.StartEncodeThread(&queue),
+					"StartEncodeThread refused the sync-mode encoder");
 
 				syncEncoder.Destroy();
 			}
@@ -346,11 +345,11 @@ namespace Bench
 				ok &= Check(asyncEncoder.IsAsyncPipelineEnabled(),
 					"encoder reports the async pipeline is on");
 
-				EncodeThread encodeThread;
-				ok &= Check(encodeThread.Initialize(&queue, &asyncEncoder),
-					"EncodeThread accepted the async-mode encoder");
+				ok &= Check(asyncEncoder.StartEncodeThread(&queue),
+					"StartEncodeThread accepted the async-mode encoder");
 
-				encodeThread.Shutdown();
+				// Destroy 가 큐 펌프를 알아서 멈춘다. 예전에는 호출자가
+				// EncodeThread::Shutdown 을 먼저 불러야 했다.
 				asyncEncoder.Destroy();
 			}
 
@@ -755,7 +754,7 @@ namespace Bench
 		TestGateCoversInitAndDestroy(bench);
 		TestReconfigureBitrateWhileEncoding(bench);
 		TestReconfigureRejectsInitOnlyFields(bench);
-		TestEncodeThreadRejectsSyncEncoder(bench);
+		TestStartEncodeThreadRejectsSyncEncoder(bench);
 		TestRepeatedSessions(bench);
 
 		// ---- 디코더 ----

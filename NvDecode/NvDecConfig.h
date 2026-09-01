@@ -23,6 +23,7 @@ enum class NvDecErrorCode : uint32_t
 struct NvDecStats
 {
 	uint64_t parsedPackets = 0;          // Parse 호출 성공 횟수
+	uint64_t packetsFailed = 0;          // Parse 실패 횟수 (디코드 스레드를 쓸 때만)
 	uint64_t decodedFrames = 0;          // 텍스처까지 완성된 프레임 수
 	uint64_t deliveredFrames = 0;        // AcquireFrame 으로 앱에 나간 수
 	uint64_t droppedPoolExhausted = 0;   // 앱이 반납하지 않아 버린 수

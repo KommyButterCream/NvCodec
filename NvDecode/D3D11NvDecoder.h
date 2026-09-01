@@ -18,6 +18,7 @@
 
 class ID3D11ImmediateContextGate;
 class D3D11NvDecoder_Impl;
+class DecodeFrameQueue;
 
 class D3D11_NVIDIA_DECODER_API D3D11NvDecoder
 {
@@ -38,6 +39,12 @@ public:
 	};
 
 	using ErrorCallback = void (*)(NvDecErrorCode errorCode, void* userData);
+
+	// 디코드 스레드가 프레임 하나를 완성할 때마다 부른다.
+	// frame 은 콜백이 반환할 때까지만 유효하다 — 스레드가 곧바로 반납한다.
+	// 텍스처를 콜백 밖으로 들고 나가려면 이 스레드를 쓰지 말고
+	// AcquireFrame / ReleaseFrame 을 직접 호출해야 한다.
+	using FrameCallback = void (*)(const Frame& frame, void* userData);
 
 	D3D11NvDecoder();
 	~D3D11NvDecoder();
@@ -82,6 +89,13 @@ public:
 	// 프레임을 유실하거나 파이프라인이 정지했을 때 통지받는다.
 	// 콜백은 디코드 스레드에서 호출되므로 블로킹 작업을 하면 안 된다.
 	void SetErrorCallback(ErrorCallback callback, void* userData);
+
+	// 큐에서 패킷을 꺼내 이 디코더에 먹이는 워커를 시작한다.
+	// 결과는 SetFrameCallback 으로 등록한 콜백에 도착한다.
+	// Destroy 가 자동으로 멈추므로 종료 순서를 신경 쓸 필요가 없다.
+	bool StartDecodeThread(DecodeFrameQueue* queue);
+	void StopDecodeThread();
+	void SetFrameCallback(FrameCallback callback, void* userData);
 
 	void GetStats(NvDecStats& stats) const;
 

@@ -150,14 +150,12 @@
     <ClCompile Include="..\NvDecode\DecodeFrameQueue.cpp" />
     <ClCompile Include="..\NvDecode\D3D11NvDecoder_Impl.cpp" />
     <ClCompile Include="..\NvDecode\DecodeThread.cpp" />
-    <ClCompile Include="..\NvDecode\DecodeThread_Impl.cpp" />
     <ClCompile Include="..\NvEncode\D3D11NvEncoder.cpp" />
     <ClCompile Include="..\NvEncode\D3D11NvEncoder_Impl.cpp" />
     <ClCompile Include="..\NvEncode\D3D11VideoProcessorNV12.cpp" />
     <ClCompile Include="..\NvEncode\EncodeCompletionThread.cpp" />
     <ClCompile Include="..\NvEncode\EncodeFrameQueue.cpp" />
     <ClCompile Include="..\NvEncode\EncodeThread.cpp" />
-    <ClCompile Include="..\NvEncode\EncodeThread_Impl.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
@@ -168,14 +166,12 @@
     <ClInclude Include="..\NvDecode\D3D11NvDecoder.h" />
     <ClInclude Include="..\NvDecode\D3D11NvDecoder_Impl.h" />
     <ClInclude Include="..\NvDecode\DecodeThread.h" />
-    <ClInclude Include="..\NvDecode\DecodeThread_Impl.h" />
     <ClInclude Include="..\NvEncode\D3D11NvEncoder.h" />
     <ClInclude Include="..\NvEncode\D3D11NvEncoder_Impl.h" />
     <ClInclude Include="..\NvEncode\D3D11VideoProcessorNV12.h" />
     <ClInclude Include="..\NvEncode\EncodeCompletionThread.h" />
     <ClInclude Include="..\NvEncode\EncodeFrameQueue.h" />
     <ClInclude Include="..\NvEncode\EncodeThread.h" />
-    <ClInclude Include="..\NvEncode\EncodeThread_Impl.h" />
     <ClInclude Include="..\NvEncode\NvEncPacket.h" />
     <ClInclude Include="pch.h" />
   </ItemGroup>
@@ -190,6 +186,11 @@
       <Project>{e3bd70c4-fc37-4703-9a54-152fd00bdea2}</Project>
     </ProjectReference>
   </ItemGroup>
+  <Target Name="NoStlCheck" BeforeTargets="ClCompile">
+    <!-- NvCodec DLL은 STL을 쓰지 않는다. 컨테이너/문자열/알고리즘 헤더가 들어오면
+         빌드를 멈춘다. new, stdint.h 는 freestanding 서브셋이라 허용한다. -->
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\tools\nostl-check.ps1&quot; -Root &quot;$(MSBuildProjectDirectory)\..&quot;" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.8.targets" />

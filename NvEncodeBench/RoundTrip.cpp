@@ -11,10 +11,8 @@
 
 #include "../NvDecode/D3D11NvDecoder.h"
 #include "../NvDecode/DecodeFrameQueue.h"
-#include "../NvDecode/DecodeThread.h"
 #include "../NvEncode/D3D11NvEncoder.h"
 #include "../NvEncode/EncodeFrameQueue.h"
-#include "../NvEncode/EncodeThread.h"
 
 namespace Bench
 {
@@ -135,7 +133,7 @@ namespace Bench
 	{
 		// 앱이 디코딩된 프레임을 붙잡고 있는 상황을 재현하는 드레인 스레드.
 		//
-		// DecodeThread 는 콜백이 반환하는 즉시 ReleaseFrame 을 부른다. 그건
+		// 디코더 내장 큐 펌프는 콜백이 반환하는 즉시 ReleaseFrame 을 부른다. 그건
 		// "콜백 안에서만 쓴다" 는 가장 흔한 사용법이고 이미 기본 경로로 검증된다.
 		// 여기서는 반대쪽, 앱이 여러 장을 동시에 들고 있다가 나중에 돌려주는
 		// 사용법을 검증한다. 슬롯 수보다 많이 들고 있으면 풀이 고갈되어야 하고,
@@ -330,7 +328,7 @@ namespace Bench
 		}
 
 		// 엔코딩이 끝나면 그 비트스트림을 그대로 디코드 큐에 밀어 넣는다.
-		void OnEncodedFrame(const EncodeThread::EncodedFrame& frame, void* userData)
+		void OnEncodedFrame(const NvEncPacket& frame, void* userData)
 		{
 			RoundTripBench::Impl* impl = static_cast<RoundTripBench::Impl*>(userData);
 			if (!impl || !impl->decodeQueue)
@@ -555,11 +553,10 @@ namespace Bench
 		m_impl->decodeQueue = &decodeQueue;
 
 		// 프레임 반납 방식 두 가지 중 하나를 고른다.
-		//   기본        : DecodeThread. 콜백이 반환하면 곧바로 반납한다.
+		//   기본        : 디코더 내장 큐 펌프. 콜백이 반환하면 곧바로 반납한다.
 		//   hold / leak : HoldingDrainThread. 앱이 여러 장을 동시에 들고 있는 경우.
 		const bool useHoldingDrain = (config.holdFrameCount > 1U) || config.leakFrames;
 
-		DecodeThread decodeThread;
 		std::unique_ptr<HoldingDrainThread> holdingDrain;
 
 		if (useHoldingDrain)
@@ -580,10 +577,10 @@ namespace Bench
 		}
 		else
 		{
-			decodeThread.SetFrameCallback(OnDecodedFrame, m_impl);
-			if (!decodeThread.Initialize(&decodeQueue, &decoder))
+			decoder.SetFrameCallback(OnDecodedFrame, m_impl);
+			if (!decoder.StartDecodeThread(&decodeQueue))
 			{
-				printf_s("[ROUNDTRIP ERROR] DecodeThread Initialize failed.\n");
+				printf_s("[ROUNDTRIP ERROR] StartDecodeThread failed.\n");
 				decoder.Destroy();
 				m_impl->config = nullptr;
 				m_impl->result = nullptr;
@@ -596,7 +593,7 @@ namespace Bench
 			if (holdingDrain)
 				holdingDrain->Shutdown();
 			else
-				decodeThread.Shutdown();
+				decoder.StopDecodeThread();
 		};
 
 		// ---- 엔코더 ----
@@ -631,11 +628,10 @@ namespace Bench
 			return false;
 		}
 
-		EncodeThread encodeThread;
-		encodeThread.SetEncodedFrameCallback(OnEncodedFrame, m_impl);
-		if (!encodeThread.Initialize(&encodeQueue, &encoder))
+		encoder.SetEncodedPacketCallback(OnEncodedFrame, m_impl);
+		if (!encoder.StartEncodeThread(&encodeQueue))
 		{
-			printf_s("[ROUNDTRIP ERROR] EncodeThread Initialize failed.\n");
+			printf_s("[ROUNDTRIP ERROR] StartEncodeThread failed.\n");
 			encoder.Destroy();
 			shutdownDrain();
 			decoder.Destroy();
@@ -713,7 +709,7 @@ namespace Bench
 		// 세 단계를 순서대로 기다린다. 하나라도 건너뛰면 뒤쪽 단계가
 		// 아직 도착하지 않은 프레임을 "유실" 로 집계한다.
 		//
-		//   1. 엔코드 큐 -> 엔코더   (EncodeThread 가 큐를 비울 때까지)
+		//   1. 엔코드 큐 -> 엔코더   (큐 펌프가 큐를 비울 때까지)
 		//   2. 엔코더 -> 콜백        (제출된 프레임이 전부 회수될 때까지)
 		//   3. 디코드 큐 -> 디코더   (파싱될 때까지)
 		//
@@ -767,7 +763,7 @@ namespace Bench
 			}
 		}
 
-		encodeThread.Shutdown();
+		encoder.StopEncodeThread();
 		shutdownDrain();
 
 		result.wallSeconds = TicksToMilliseconds(QpcNow() - startTicks) / 1000.0;

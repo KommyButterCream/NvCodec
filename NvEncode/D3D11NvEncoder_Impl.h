@@ -17,6 +17,8 @@ struct ID3D11Texture2D;
 class ID3D11ImmediateContextGate;
 class D3D11VideoProcessorNV12;
 class EncodeCompletionThread;
+class EncodeFrameQueue;
+class EncodeThread;
 
 enum class NvEncPacketStatus : uint8_t
 {
@@ -88,6 +90,13 @@ public:
 
 	bool IsFaulted() const;
 	void GetStats(NvEncStats& stats) const;
+
+	// 큐에서 프레임을 꺼내 이 엔코더에 밀어 넣는 워커를 시작한다.
+	// 결과는 SetEncodedPacketCallback 으로 이미 등록된 콜백으로 간다.
+	// Destroy 가 자동으로 멈추므로 호출자가 순서를 지킬 필요가 없다.
+	bool StartEncodeThread(EncodeFrameQueue* queue);
+	void StopEncodeThread();
+	void SetKeyFrameRequestCallback(bool (*callback)(void*), void* userData);
 	void DebugFailNextOutputs(uint32_t count);
 
 private:
@@ -198,6 +207,10 @@ private:
 	HANDLE m_frameSubmittedEvent = nullptr;
 
 	EncodeCompletionThread* m_encodeCompletionThread = nullptr;
+
+	// 큐 펌프. 앱이 StartEncodeThread 를 부를 때만 생성된다.
+	// 동기 인코딩(PrepareFrameForEncode + DoEncode)에서는 nullptr 로 남는다.
+	EncodeThread* m_encodeThread = nullptr;
 
 	uint32_t m_encodeBufferCount = 1;
 	NvEncPacketBuffer* m_packetBuffers = nullptr;

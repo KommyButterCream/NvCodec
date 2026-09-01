@@ -173,7 +173,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 		m_readPos = FindNextSlotWithState(m_states, m_bufferCount, WrapRingIndex(droppedIndex + 1, m_bufferCount), SLOT_QUEUED);
 
 		--m_queuedCount;
-		++m_dropCount;
+		::InterlockedIncrement64(&m_dropCount);
 		m_writePos = droppedIndex;
 	}
 	else
@@ -327,9 +327,25 @@ void DecodeFrameQueue::Shutdown()
 	::ReleaseSRWLockExclusive(&m_lock);
 }
 
-int32_t DecodeFrameQueue::GetProcessCount()
+bool DecodeFrameQueue::IsValid() const
 {
-	return ::InterlockedCompareExchange(&m_processCount, 0, 0);
+	return m_items != nullptr && m_buffers != nullptr && m_states != nullptr && m_bufferCount > 0;
+}
+
+bool DecodeFrameQueue::IsRunning() const
+{
+	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_running), TRUE, TRUE) != FALSE;
+}
+
+int32_t DecodeFrameQueue::GetProcessCount() const
+{
+	return ::InterlockedCompareExchange(const_cast<volatile LONG*>(&m_processCount), 0, 0);
+}
+
+uint64_t DecodeFrameQueue::GetDropCount() const
+{
+	return static_cast<uint64_t>(
+		::InterlockedCompareExchange64(const_cast<volatile LONG64*>(&m_dropCount), 0, 0));
 }
 
 size_t DecodeFrameQueue::GetBufferSize() const

@@ -54,14 +54,26 @@ public:
 
 	void Shutdown();
 
-	int32_t GetProcessCount();
+	// 생성자에서 할당에 실패했는지 확인한다.
+	// 생성자는 예외를 던지지 않으므로 이 검사 없이는 실패를 알 수 없다.
+	bool IsValid() const;
+
+	// AcquireReadFrame 이 nullptr 을 반환했을 때 "큐가 닫혔다"와
+	// "HELD 프레임이 남아있다(프로그래밍 오류)"를 구분하기 위해 사용한다.
+	bool IsRunning() const;
+
+	int32_t GetProcessCount() const;
+
+	// 뒤에 온 프레임에 밀려 버려진 수. 관측이 안 되면 왜 끊기는지 알 수 없다.
+	uint64_t GetDropCount() const;
+
 	size_t GetBufferSize() const;
 
 private:
 	size_t m_bufferCount = 0;
 	size_t m_bufferSize = 0;
 
-	size_t m_dropCount = 0;
+	volatile LONG64 m_dropCount = 0;
 	uint8_t* m_buffers = nullptr;
 	DecodeFrameItem* m_items = nullptr;
 	SlotState* m_states = nullptr;

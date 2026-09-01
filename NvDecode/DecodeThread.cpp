@@ -41,3 +41,15 @@ void DecodeThread::SetFrameCallback(FrameCallback callback, void* userData)
 		m_impl->SetFrameCallback(callback, userData);
 	}
 }
+
+void DecodeThread::GetStats(Stats& stats) const
+{
+	if (m_impl)
+	{
+		m_impl->GetStats(stats);
+	}
+	else
+	{
+		stats = Stats();
+	}
+}

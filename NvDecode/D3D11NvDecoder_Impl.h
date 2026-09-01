@@ -8,9 +8,13 @@
 #include "../Nvidia Video Codec SDK/include/NvDecoder/nvcuvid.h"
 #include "../Nvidia Video Codec SDK/include/NvDecoder/cuviddec.h"
 
+#include "D3D11NvDecoder.h"
+#include "NvDecConfig.h"
+
 struct ID3D11Texture2D;
 struct ID3D11Device;
 struct ID3D11DeviceContext;
+class ID3D11ImmediateContextGate;
 
 class D3D11NvDecoder_Impl
 {
@@ -41,21 +45,41 @@ public:
 		uint32_t decodeSurfaceCount = 0;
 	};
 
-	struct Frame
+	// OnVideoSequence 가 파서에 돌려주는 값.
+	// NVDEC 규약이라 의미를 이름으로 남긴다.
+	//   0            : 실패. 파싱을 중단한다
+	//   1            : 성공. 기존 decode surface 수를 그대로 쓴다
+	//   2 이상       : 성공. 이 수만큼 decode surface 를 쓴다
+	enum class SequenceResult : int32_t
 	{
-		ID3D11Texture2D* texture = nullptr;
-		HANDLE sharedHandle = nullptr;
-		uint64_t timestamp = 0;
+		Failed = 0,
+		KeepSurfaceCount = 1,
 	};
 
-	D3D11NvDecoder_Impl();
+	using ErrorCallback = D3D11NvDecoder::ErrorCallback;
+	using Frame = D3D11NvDecoder::Frame;
+
+	D3D11NvDecoder_Impl() = default;
 	~D3D11NvDecoder_Impl();
 
-	bool Initialize(ID3D11Device* device, bool sharedOutputTextureMode = false);
+	D3D11NvDecoder_Impl(const D3D11NvDecoder_Impl&) = delete;
+	D3D11NvDecoder_Impl& operator=(const D3D11NvDecoder_Impl&) = delete;
+
+	bool Initialize(
+		ID3D11Device* device,
+		const NvDecConfig& config,
+		ID3D11ImmediateContextGate* contextGate);
 	void Destroy();
 
-	bool Parse(const uint8_t* data, uint32_t size, bool endOfPicture = true, bool endOfStream = false, bool discontinuity = false);
-	Frame* GetFrame();
+	bool Parse(const uint8_t* data, uint32_t size, uint64_t timestamp,
+		bool endOfPicture, bool endOfStream, bool discontinuity);
+
+	Frame* AcquireFrame();
+	void ReleaseFrame(Frame* frame);
+
+	void SetErrorCallback(ErrorCallback callback, void* userData);
+	void GetStats(NvDecStats& stats) const;
+	bool IsFaulted() const;
 
 private:
 	static int32_t CUDAAPI HandleVideoSequence(void* userData, CUVIDEOFORMAT* format);
@@ -67,22 +91,36 @@ private:
 	int32_t OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo);
 
 	bool InitializeCuda();
-	bool ReconfigureDecoder(CUVIDEOFORMAT* videoFormat);
 
-	bool CreateTexturePool();
-	void DestroyTexturePool();
+	// 반환값은 OnVideoSequence 가 파서에 그대로 돌려줄 값이다.
+	// SequenceResult::Failed 면 실패, 그 외에는 decode surface 수.
+	int32_t ReconfigureDecoder(CUVIDEOFORMAT* videoFormat);
 
-	bool CreateCudaDeviceMemoryPool();
-	void DestroyCudaDeviceMemoryPool();
+	bool CreateOutputSlots();
+	void DestroyOutputSlots();
 
-	void WaitForAllFrames();
+	bool CreateBgraStagingBuffers();
+	void DestroyBgraStagingBuffers();
 
-	bool SaveFrameToBmp(int32_t index, const wchar_t* fileName);
+	void WaitForAllSlots();
+
+	// FIFO 로 다음에 쓸 슬롯. 앱이 들고 있으면 쓸 수 없다.
+	uint32_t GetWriteSlotIndex() const;
+	uint32_t GetReadSlotIndex() const;
+	bool IsSlotHeldByApp(uint32_t slot) const;
+
+	void EnterFaultedState(NvDecErrorCode errorCode);
+	void InvokeErrorCallback(NvDecErrorCode errorCode);
+	void NoteLostFrame(NvDecErrorCode errorCode);
+	void NoteHealthyFrame();
+
+	bool SaveFrameToBmp(uint32_t slot, const wchar_t* fileName);
 	bool SaveNV12ToRawFile(CUdeviceptr srcFrame, unsigned int srcPitch, const wchar_t* fileName);
 
 private:
 	ID3D11Device* m_D3D11Device = nullptr;
 	ID3D11DeviceContext* m_D3D11Context = nullptr;
+	ID3D11ImmediateContextGate* m_contextGate = nullptr;
 
 	CUdevice m_cudaDevice = 0;
 	CUcontext m_cudaContext = nullptr;
@@ -92,23 +130,48 @@ private:
 	CUvideodecoder m_decoder = nullptr;
 	CUvideoparser m_parser = nullptr;
 
-	static const int32_t TEXTURE_POOL_COUNT = 8;
+	// 출력 슬롯. 하나의 슬롯 번호가 아래를 전부 색인한다.
+	// 엔코더의 슬롯 링과 같은 구조다.
+	static constexpr uint32_t kMaxOutputSlotCount = 32;
+	static constexpr uint32_t kMinOutputSlotCount = 2;
 
-	CUevent m_cuEvents[TEXTURE_POOL_COUNT] = {};
-	ID3D11Texture2D* m_textures[TEXTURE_POOL_COUNT] = {};
-	CUgraphicsResource m_cudaResources[TEXTURE_POOL_COUNT] = {};
-	CUdeviceptr m_cuBGRABuffer[TEXTURE_POOL_COUNT] = {};
-	size_t m_cuBGRAPitch = 0;
+	uint32_t m_outputSlotCount = 0;
+	CUevent m_decodeCompleteEvents[kMaxOutputSlotCount] = {};
+	ID3D11Texture2D* m_outputTextures[kMaxOutputSlotCount] = {};
+	CUgraphicsResource m_cudaResources[kMaxOutputSlotCount] = {};
+	CUdeviceptr m_bgraStagingBuffers[kMaxOutputSlotCount] = {};
+	Frame m_frames[kMaxOutputSlotCount] = {};
+
+	// 앱이 AcquireFrame 으로 가져간 뒤 아직 ReleaseFrame 하지 않은 슬롯.
+	// 이 슬롯에는 새 프레임을 쓸 수 없다.
+	volatile LONG m_slotHeldByApp[kMaxOutputSlotCount] = {};
+
+	size_t m_bgraStagingPitch = 0;
 
 	CUVIDEOFORMAT m_cuVideoFormat = {};
 	VideoFormatDesc m_videoFormatDesc = {};
-	alignas(64) LONG m_reconfiguring = FALSE;
+	alignas(64) volatile LONG m_reconfiguring = FALSE;
 
-	uint32_t m_cacheTextureWidth = 0;
-	uint32_t m_cacheTextureHeight = 0;
-	bool m_sharedOutputTextureMode = false;
-	Frame m_frames[TEXTURE_POOL_COUNT] = {};
+	uint32_t m_cachedTextureWidth = 0;
+	uint32_t m_cachedTextureHeight = 0;
 
-	alignas(64) LONG m_writeIndex = 0;
-	alignas(64) LONG m_readIndex = 0;
+	NvDecConfig m_config = {};
+
+	// 래핑하지 않는 단조증가 카운터. 슬롯은 & (count - 1) 로 얻는다.
+	alignas(64) volatile LONG m_writeSequence = 0;
+	alignas(64) volatile LONG m_readSequence = 0;
+
+	volatile LONG m_faulted = FALSE;
+	volatile LONG m_consecutiveLostFrames = 0;
+	volatile LONG m_framesHeldByApp = 0;
+	volatile LONG64 m_parsedPacketCount = 0;
+	volatile LONG64 m_decodedFrameCount = 0;
+	volatile LONG64 m_deliveredFrameCount = 0;
+	volatile LONG64 m_droppedPoolExhaustedCount = 0;
+	volatile LONG64 m_droppedNotConsumedCount = 0;
+	volatile LONG64 m_droppedDisplayFailedCount = 0;
+
+	ErrorCallback m_errorCallback = nullptr;
+	void* m_errorCallbackUserData = nullptr;
+	mutable SRWLOCK m_callbackLock = SRWLOCK_INIT;
 };

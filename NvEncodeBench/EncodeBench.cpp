@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "../../Core/Concurrency/WaitableTimer.h"
 #include "../NvEncode/D3D11NvEncoder.h"
 
 namespace Bench
@@ -82,20 +83,6 @@ namespace Bench
 
 				m_intervalTicks = static_cast<int64_t>(QpcTicksPerSecond() / static_cast<double>(targetFps));
 				m_nextDeadline = QpcNow();
-
-				m_timer = ::CreateWaitableTimerExW(
-					nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-				if (!m_timer)
-				{
-					// 고해상도 타이머를 못 만들면 일반 타이머로 내려간다.
-					m_timer = ::CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
-				}
-			}
-
-			~FramePacer()
-			{
-				if (m_timer)
-					::CloseHandle(m_timer);
 			}
 
 			FramePacer(const FramePacer&) = delete;
@@ -112,20 +99,18 @@ namespace Bench
 				if (remaining <= 0)
 					return;   // 이미 늦었다. 따라잡지 않고 그냥 진행한다.
 
-				if (m_timer)
+				// QPC 틱을 100ns 로 바로 바꿔 넘긴다. ms 로 한 번 내렸다
+				// 올리면 그만큼 정밀도가 깎인다.
+				const double hundredNanos =
+					(static_cast<double>(remaining) * 10000000.0) / QpcTicksPerSecond();
+
+				if (m_timer.SignalAfter100ns(static_cast<int64_t>(hundredNanos)))
 				{
-					LARGE_INTEGER dueTime = {};
-					// 음수는 상대 시간(100ns 단위).
-					const double hundredNanos =
-						(static_cast<double>(remaining) * 10000000.0) / QpcTicksPerSecond();
-					dueTime.QuadPart = -static_cast<LONGLONG>(hundredNanos);
-					if (::SetWaitableTimer(m_timer, &dueTime, 0, nullptr, nullptr, FALSE))
-					{
-						::WaitForSingleObject(m_timer, INFINITE);
-						return;
-					}
+					m_timer.Wait();
+					return;
 				}
 
+				// 타이머를 못 얻은 환경 폴백. 스핀으로 데드라인까지 버틴다.
 				while (QpcNow() < m_nextDeadline)
 					::Sleep(0);
 			}
@@ -134,7 +119,7 @@ namespace Bench
 			bool m_enabled = false;
 			int64_t m_intervalTicks = 0;
 			int64_t m_nextDeadline = 0;
-			HANDLE m_timer = nullptr;
+			Core::Concurrency::WaitableTimer m_timer;
 		};
 
 		bool WriteCsv(const std::string& path,

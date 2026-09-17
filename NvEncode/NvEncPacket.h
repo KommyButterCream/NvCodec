@@ -2,6 +2,28 @@
 
 #include <stdint.h>
 
+struct ID3D11Texture2D;
+
+// 인코더에 넣는 입력 프레임 한 장.
+//
+// 가리키는 방법이 두 가지다.
+//   texture      : 인코더와 같은 디바이스의 텍스처
+//   sourceSlotId : 생산자가 공유한 입력 풀의 슬롯 번호 (texture 는 nullptr)
+// 둘 중 하나는 반드시 채워야 한다.
+//
+// 이 핸들의 실제 자원은 앱 것이다. 인코더는 다 쓰거나 버린 시점에
+// SetFrameReleaseCallback 으로 등록한 콜백으로 돌려준다.
+struct NvEncInputFrame
+{
+	ID3D11Texture2D* texture = nullptr;
+	int64_t sourceSlotId = -1;
+	uint64_t frameId = 0ULL;
+};
+
+// 인코더가 입력 프레임을 다 썼거나 버렸을 때 부른다.
+// 인코드 스레드 또는 유입 스레드에서 불리므로 블로킹 작업을 하면 안 된다.
+using NvEncFrameReleaseCallback = void (*)(NvEncInputFrame& frame, void* userData);
+
 struct NvEncPacket
 {
 	const uint8_t* data = nullptr;
@@ -34,8 +56,11 @@ struct NvEncStats
 	uint32_t pendingFrames = 0;     // NVENC 에 제출됐고 아직 회수하지 않은 프레임 수
 	bool faulted = false;           // 파이프라인 정지 여부
 
-	// 큐에서 꺼냈지만 인코더에 넣지 못한 프레임. 인코드 스레드를 쓸 때만 채워진다.
-	// EncodeFrameQueue::GetDropCount 는 enqueue 측 드롭만 세므로 여기서 따로 센다.
+	// 인코드 스레드를 쓸 때만 채워진다.
+	//
+	// droppedInputQueue 는 유입 시점, 나머지는 큐에서 꺼낸 뒤의 드롭이다.
+	uint64_t dequeuedFrames = 0;        // 유입 큐에서 인코드 스레드가 꺼낸 수
+	uint64_t droppedInputQueue = 0;     // 유입 큐가 최신 프레임으로 교체하며 버렸다
 	uint64_t droppedNoEncoderSlot = 0;  // 제출 시점에 빈 슬롯이 없었다
 	uint64_t droppedPrepareFailed = 0;  // NV12 변환/매핑 실패
 	uint64_t droppedSubmitFailed = 0;   // SubmitFrame 실패

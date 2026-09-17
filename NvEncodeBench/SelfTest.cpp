@@ -320,9 +320,6 @@ namespace Bench
 			SimpleContextGate gate;
 			ReleaseCounter counter;
 
-			EncodeFrameQueue queue;
-			ok &= Check(queue.Initialize(2, CountingRelease, &counter), "queue initialized");
-
 			// 동기 모드 엔코더는 거절돼야 한다.
 			{
 				D3D11NvEncoder syncEncoder;
@@ -331,7 +328,7 @@ namespace Bench
 				ok &= Check(!syncEncoder.IsAsyncPipelineEnabled(),
 					"encoder reports the async pipeline is off");
 
-				ok &= Check(!syncEncoder.StartEncodeThread(&queue),
+				ok &= Check(!syncEncoder.StartEncodeThread(),
 					"StartEncodeThread refused the sync-mode encoder");
 
 				syncEncoder.Destroy();
@@ -345,7 +342,8 @@ namespace Bench
 				ok &= Check(asyncEncoder.IsAsyncPipelineEnabled(),
 					"encoder reports the async pipeline is on");
 
-				ok &= Check(asyncEncoder.StartEncodeThread(&queue),
+				asyncEncoder.SetFrameReleaseCallback(CountingRelease, &counter);
+				ok &= Check(asyncEncoder.StartEncodeThread(),
 					"StartEncodeThread accepted the async-mode encoder");
 
 				// Destroy 가 큐 펌프를 알아서 멈춘다. 예전에는 호출자가

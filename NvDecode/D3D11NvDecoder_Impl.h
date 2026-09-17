@@ -82,8 +82,11 @@ public:
 	// =====================================================================
 	// 디코드 스레드 제어
 	// =====================================================================
-	bool StartDecodeThread(DecodeFrameQueue* queue);
+	bool StartDecodeThread();
 	void StopDecodeThread();
+
+	// 유입. 디코드 스레드가 꺼내 간다.
+	bool EnqueueFrame(const NvDecInputFrame& frame);
 
 	// =====================================================================
 	// 콜백 등록
@@ -127,6 +130,9 @@ private:
 
 	bool CreateBgraStagingBuffers();
 	void DestroyBgraStagingBuffers();
+
+	bool InitializeInputQueue(size_t depth, size_t bufferSize);
+	void DestroyInputQueue();
 
 	void WaitForAllSlots();
 
@@ -195,6 +201,9 @@ private:
 	// 큐 펌프. 앱이 StartDecodeThread 를 부를 때만 생성된다.
 	// 직접 Parse / AcquireFrame 을 돌리는 앱에서는 nullptr 로 남는다.
 	DecodeThread* m_decodeThread = nullptr;
+
+	// 유입 큐. 소비자가 이 디코더 하나뿐이라 디코더가 소유한다.
+	DecodeFrameQueue* m_inputQueue = nullptr;
 
 	// StartDecodeThread 이전에 SetFrameCallback 이 불릴 수 있다.
 	D3D11NvDecoder::FrameCallback m_pendingFrameCallback = nullptr;

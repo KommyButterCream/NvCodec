@@ -9,6 +9,7 @@
 #include "D3D11VideoProcessorNV12.h"
 #include "EncodeCompletionThread.h"
 #include "EncodeThread.h"
+#include "EncodeFrameQueue.h"
 
 #include <new> // for std::nothrow
 #include <stdio.h> // for printf_s, fopen_s, fwrite
@@ -228,6 +229,15 @@ bool D3D11NvEncoder_Impl::Initialize(
 	if (m_asyncPipelineEnabled && !InitializeEncodeCompletionThread())
 	{
 		printf_s("[NVENC ERROR] Initialize stage failed: InitializeEncodeCompletionThread.\n");
+		Destroy();
+		return false;
+	}
+
+	// 유입 큐. 소비자가 인코드 스레드 하나뿐이라 여기서 만들어 소유한다.
+	// 동기 파이프라인에는 큐가 없다 — 호출자가 직접 DoEncode 를 돌린다.
+	if (m_asyncPipelineEnabled && !InitializeInputQueue(config.inputQueueDepth))
+	{
+		printf_s("[NVENC ERROR] Initialize stage failed: InitializeInputQueue.\n");
 		Destroy();
 		return false;
 	}
@@ -1091,6 +1101,10 @@ void D3D11NvEncoder_Impl::Destroy()
 	// 순서를 틀리면 스레드가 해제된 엔코더를 만졌다.
 	StopEncodeThread();
 
+	// 소비자가 멈춘 뒤에 큐를 닫는다. Shutdown 이 대기 중이던 프레임을
+	// 앱에 돌려주므로 캡처 슬롯이 묶인 채 남지 않는다.
+	DestroyInputQueue();
+
 	::InterlockedExchange(&m_acceptFrames, FALSE);
 
 	if (m_encodeCompletionThread)
@@ -1327,10 +1341,13 @@ void D3D11NvEncoder_Impl::DestroySharedInputPool()
 // 인코드 스레드 제어
 // =============================================================================
 
-bool D3D11NvEncoder_Impl::StartEncodeThread(EncodeFrameQueue* queue)
+bool D3D11NvEncoder_Impl::StartEncodeThread()
 {
-	if (!queue)
+	// 큐는 Initialize 가 만든다. 없다는 것은 동기 파이프라인이라는 뜻이고,
+	// 그때는 아무도 출력을 회수하지 않아 이 스레드가 곧 정지한다.
+	if (!m_inputQueue)
 	{
+		printf_s("[NVENC ERROR] StartEncodeThread requires the async pipeline.\n");
 		return false;
 	}
 
@@ -1342,7 +1359,7 @@ bool D3D11NvEncoder_Impl::StartEncodeThread(EncodeFrameQueue* queue)
 		return false;
 	}
 
-	if (!m_encodeThread->Initialize(queue, this))
+	if (!m_encodeThread->Initialize(m_inputQueue, this))
 	{
 		delete m_encodeThread;
 		m_encodeThread = nullptr;
@@ -1363,6 +1380,65 @@ void D3D11NvEncoder_Impl::StopEncodeThread()
 	m_encodeThread->Shutdown();
 	delete m_encodeThread;
 	m_encodeThread = nullptr;
+}
+
+bool D3D11NvEncoder_Impl::InitializeInputQueue(uint32_t depth)
+{
+	DestroyInputQueue();
+
+	m_inputQueue = new (std::nothrow) EncodeFrameQueue();
+	if (!m_inputQueue)
+		return false;
+
+	// 큐에는 우리 정적 함수를 걸어 둔다. 앱 콜백은 언제든 갈아끼울 수 있어야
+	// 하는데, 큐의 콜백은 Initialize 시점에 고정되기 때문이다.
+	if (!m_inputQueue->Initialize(depth, QueueFrameReleaseCallback, this))
+	{
+		DestroyInputQueue();
+		return false;
+	}
+
+	return true;
+}
+
+void D3D11NvEncoder_Impl::DestroyInputQueue()
+{
+	if (!m_inputQueue)
+		return;
+
+	// Shutdown 이 대기 중인 프레임을 앱에 돌려준다. 그 전에 인코드 스레드가
+	// 멈춰 있어야 HELD 슬롯이 남지 않는다 - Destroy 가 그 순서를 지킨다.
+	m_inputQueue->Shutdown();
+	delete m_inputQueue;
+	m_inputQueue = nullptr;
+}
+
+void D3D11NvEncoder_Impl::QueueFrameReleaseCallback(NvEncInputFrame& frame, void* userData)
+{
+	D3D11NvEncoder_Impl* self = static_cast<D3D11NvEncoder_Impl*>(userData);
+	if (!self)
+		return;
+
+	const NvEncFrameReleaseCallback callback = self->m_frameReleaseCallback;
+	void* const callbackUserData = self->m_frameReleaseUserData;
+
+	if (callback)
+		callback(frame, callbackUserData);
+}
+
+void D3D11NvEncoder_Impl::SetFrameReleaseCallback(NvEncFrameReleaseCallback callback, void* userData)
+{
+	m_frameReleaseUserData = userData;
+	::MemoryBarrier();
+	m_frameReleaseCallback = callback;
+}
+
+bool D3D11NvEncoder_Impl::EnqueueFrame(const NvEncInputFrame& frame, bool forceKeyFrame)
+{
+	if (!m_inputQueue)
+		return false;
+
+	return m_inputQueue->EnqueueLatest(frame, forceKeyFrame);
 }
 
 // =============================================================================
@@ -2089,6 +2165,12 @@ void D3D11NvEncoder_Impl::GetStats(NvEncStats& stats) const
 	stats.faulted = IsFaulted();
 
 	// 큐 펌프를 쓰지 않으면 이 값들은 0 으로 남는다.
+	if (m_inputQueue)
+	{
+		stats.droppedInputQueue = m_inputQueue->GetDropCount();
+		stats.dequeuedFrames = m_inputQueue->GetProcessCount();
+	}
+
 	if (m_encodeThread)
 	{
 		m_encodeThread->FillStats(stats);

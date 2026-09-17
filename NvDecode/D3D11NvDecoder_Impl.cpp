@@ -2,6 +2,7 @@
 #include "D3D11NvDecoder_Impl.h"
 
 #include "DecodeThread.h"
+#include "DecodeFrameQueue.h"
 
 #include <cudaD3D11.h>
 #include <malloc.h>
@@ -225,6 +226,14 @@ bool D3D11NvDecoder_Impl::Initialize(
 	// NVDEC 사용을 위한 ctxLock / Stream / Event / Parser 리소스 생성
 	if (!InitializeCuda())
 	{
+		Destroy();
+		return false;
+	}
+
+	// 유입 큐. 소비자가 디코드 스레드 하나뿐이라 여기서 만들어 소유한다.
+	if (!InitializeInputQueue(config.inputQueueDepth, config.maxPacketSize))
+	{
+		printf_s("[NVDEC ERROR] Initialize stage failed: InitializeInputQueue.\n");
 		Destroy();
 		return false;
 	}
@@ -560,6 +569,9 @@ void D3D11NvDecoder_Impl::Destroy()
 	// 큐 펌프를 먼저 멈춘다. 이게 살아 있으면 해체 중인 파서로 패킷이 계속 들어온다.
 	StopDecodeThread();
 
+	// 소비자가 멈춘 뒤에 큐를 닫는다.
+	DestroyInputQueue();
+
 	// 파서를 먼저 없애야 이후 콜백이 들어오지 않는다.
 	if (m_parser)
 	{
@@ -778,10 +790,12 @@ int32_t D3D11NvDecoder_Impl::ReconfigureDecoder(CUVIDEOFORMAT* videoFormat)
 // 디코드 스레드 제어
 // =============================================================================
 
-bool D3D11NvDecoder_Impl::StartDecodeThread(DecodeFrameQueue* queue)
+bool D3D11NvDecoder_Impl::StartDecodeThread()
 {
-	if (!queue)
+	// 큐는 Initialize 가 만든다.
+	if (!m_inputQueue)
 	{
+		printf_s("[NVDEC ERROR] StartDecodeThread requires an initialized decoder.\n");
 		return false;
 	}
 
@@ -795,7 +809,7 @@ bool D3D11NvDecoder_Impl::StartDecodeThread(DecodeFrameQueue* queue)
 
 	m_decodeThread->SetFrameCallback(m_pendingFrameCallback, m_pendingFrameCallbackUserData);
 
-	if (!m_decodeThread->Initialize(queue, this))
+	if (!m_decodeThread->Initialize(m_inputQueue, this))
 	{
 		delete m_decodeThread;
 		m_decodeThread = nullptr;
@@ -815,6 +829,43 @@ void D3D11NvDecoder_Impl::StopDecodeThread()
 	m_decodeThread->Shutdown();
 	delete m_decodeThread;
 	m_decodeThread = nullptr;
+}
+
+bool D3D11NvDecoder_Impl::InitializeInputQueue(size_t depth, size_t bufferSize)
+{
+	DestroyInputQueue();
+
+	m_inputQueue = new (std::nothrow) DecodeFrameQueue();
+	if (!m_inputQueue)
+		return false;
+
+	if (!m_inputQueue->Initialize(depth, bufferSize))
+	{
+		DestroyInputQueue();
+		return false;
+	}
+
+	return true;
+}
+
+void D3D11NvDecoder_Impl::DestroyInputQueue()
+{
+	if (!m_inputQueue)
+		return;
+
+	// 큐는 패킷을 자기 버퍼로 복사해 두므로 돌려줄 것이 없다.
+	// Shutdown 은 대기 중인 리더를 깨우기 위한 것이다.
+	m_inputQueue->Shutdown();
+	delete m_inputQueue;
+	m_inputQueue = nullptr;
+}
+
+bool D3D11NvDecoder_Impl::EnqueueFrame(const NvDecInputFrame& frame)
+{
+	if (!m_inputQueue)
+		return false;
+
+	return m_inputQueue->EnqueueFrame(frame);
 }
 
 // =============================================================================
@@ -1402,7 +1453,13 @@ void D3D11NvDecoder_Impl::GetStats(NvDecStats& stats) const
 		::ReadAcquire(&m_framesHeldByApp));
 	stats.faulted = IsFaulted();
 
-	// 큐 펌프를 쓰지 않으면 packetsFailed 는 0 으로 남는다.
+	// 큐 펌프를 쓰지 않으면 이 값들은 0 으로 남는다.
+	if (m_inputQueue)
+	{
+		stats.droppedInputQueue = m_inputQueue->GetDropCount();
+		stats.dequeuedFrames = m_inputQueue->GetProcessCount();
+	}
+
 	if (m_decodeThread)
 	{
 		m_decodeThread->FillStats(stats);

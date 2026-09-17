@@ -88,14 +88,27 @@ bool D3D11NvEncoder::RegisterSharedInputPool(const HANDLE* sharedHandles, uint32
 // 인코드 스레드 제어
 // =============================================================================
 
-bool D3D11NvEncoder::StartEncodeThread(EncodeFrameQueue* queue)
+bool D3D11NvEncoder::StartEncodeThread()
 {
-	return m_impl->StartEncodeThread(queue);
+	return m_impl ? m_impl->StartEncodeThread() : false;
 }
 
 void D3D11NvEncoder::StopEncodeThread()
 {
 	m_impl->StopEncodeThread();
+}
+
+bool D3D11NvEncoder::EnqueueFrame(const NvEncInputFrame& frame, bool forceKeyFrame)
+{
+	return m_impl ? m_impl->EnqueueFrame(frame, forceKeyFrame) : false;
+}
+
+void D3D11NvEncoder::SetFrameReleaseCallback(NvEncFrameReleaseCallback callback, void* userData)
+{
+	if (m_impl)
+	{
+		m_impl->SetFrameReleaseCallback(callback, userData);
+	}
 }
 
 // =============================================================================

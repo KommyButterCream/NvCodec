@@ -62,9 +62,14 @@ void D3D11NvDecoder::Destroy()
 // 디코드 스레드 제어
 // =============================================================================
 
-bool D3D11NvDecoder::StartDecodeThread(DecodeFrameQueue* queue)
+bool D3D11NvDecoder::StartDecodeThread()
 {
-	return m_impl->StartDecodeThread(queue);
+	return m_impl ? m_impl->StartDecodeThread() : false;
+}
+
+bool D3D11NvDecoder::EnqueueFrame(const NvDecInputFrame& frame)
+{
+	return m_impl ? m_impl->EnqueueFrame(frame) : false;
 }
 
 void D3D11NvDecoder::StopDecodeThread()

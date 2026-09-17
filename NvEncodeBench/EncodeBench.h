@@ -137,7 +137,7 @@ namespace Bench
 		bool RunAsync(const BenchConfig& config, BenchResult& result, D3D11NvEncoder& encoder);
 		bool RunSync(const BenchConfig& config, BenchResult& result, D3D11NvEncoder& encoder);
 
-		static void OnReleaseFrame(EncodeFrameQueue::InputFrameHandle& frameHandle, void* userData);
+		static void OnReleaseFrame(NvEncInputFrame& frameHandle, void* userData);
 		static void OnEncodedFrame(const NvEncPacket& packet, void* userData);
 		static void OnEncoderError(NvEncErrorCode errorCode, void* userData);
 

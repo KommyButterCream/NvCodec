@@ -18,7 +18,6 @@
 
 class ID3D11ImmediateContextGate;
 class D3D11NvDecoder_Impl;
-class DecodeFrameQueue;
 
 class D3D11_NVIDIA_DECODER_API D3D11NvDecoder
 {
@@ -87,8 +86,15 @@ public:
 	// 큐에서 패킷을 꺼내 이 디코더에 먹이는 워커를 시작한다.
 	// 결과는 SetFrameCallback 으로 등록한 콜백에 도착한다.
 	// Destroy 가 자동으로 멈추므로 종료 순서를 신경 쓸 필요가 없다.
-	bool StartDecodeThread(DecodeFrameQueue* queue);
+	bool StartDecodeThread();
 	void StopDecodeThread();
+
+	// 디코드 스레드가 꺼내 갈 비트스트림을 넣는다.
+	//
+	// 큐가 자기 버퍼로 복사하므로 frame.data 는 이 호출이 반환하면
+	// 재사용해도 된다. 큐가 가득 차면 가장 오래된 것이 버려지고,
+	// 그 수는 GetStats 의 droppedInputQueue 로 나온다.
+	bool EnqueueFrame(const NvDecInputFrame& frame);
 
 	// =====================================================================
 	// 콜백 등록

@@ -41,19 +41,21 @@ namespace
 	}
 }
 
-DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
-	: m_bufferCount(bufferCount)
+bool DecodeFrameQueue::Initialize(size_t frameCount, size_t bufferSize)
 {
-	if (bufferSize == 0 || bufferCount == 0)
+	m_bufferCount = frameCount;
+
+	if (bufferSize == 0 || frameCount == 0)
 	{
-		return;
+		m_bufferCount = 0;
+		return false;
 	}
 
 	// 버퍼 수량이 2 의 n 승일 것임을 보장 해야 한다.
 	if (!IsPowerOfTwo(m_bufferCount))
 	{
 		assert(false && "bufferCount must be a power of two");
-		return;
+		return false;
 	}
 
 	// 64 바이트 얼라인 된 버퍼 1개의 크기를 계산
@@ -68,7 +70,7 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 	{
 		m_bufferCount = 0;
 		m_bufferSize = 0;
-		return;
+		return false;
 	}
 
 	// 디코딩 데이터를 저장할 구조체 버퍼 할당
@@ -79,7 +81,7 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 		m_buffers = nullptr;
 		m_bufferCount = 0;
 		m_bufferSize = 0;
-		return;
+		return false;
 	}
 
 	// 동일 수량만큼의 Slot 상태 저장하는 버퍼 할당
@@ -92,7 +94,7 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 		m_buffers = nullptr;
 		m_bufferCount = 0;
 		m_bufferSize = 0;
-		return;
+		return false;
 	}
 
 	// 기본값 초기화
@@ -105,6 +107,7 @@ DecodeFrameQueue::DecodeFrameQueue(size_t bufferSize, size_t bufferCount)
 		m_items[i].frameType = 0;
 		m_states[i] = SLOT_FREE;
 	}
+	return true;
 }
 
 DecodeFrameQueue::~DecodeFrameQueue()
@@ -328,19 +331,14 @@ void DecodeFrameQueue::Shutdown()
 	::ReleaseSRWLockExclusive(&m_lock);
 }
 
-bool DecodeFrameQueue::IsValid() const
-{
-	return m_items != nullptr && m_buffers != nullptr && m_states != nullptr && m_bufferCount > 0;
-}
-
 bool DecodeFrameQueue::IsRunning() const
 {
 	return ::ReadAcquire(&m_running) != FALSE;
 }
 
-int32_t DecodeFrameQueue::GetProcessCount() const
+uint32_t DecodeFrameQueue::GetProcessCount() const
 {
-	return ::ReadAcquire(&m_processCount);
+	return static_cast<uint32_t>(::ReadAcquire(&m_processCount));
 }
 
 uint64_t DecodeFrameQueue::GetDropCount() const

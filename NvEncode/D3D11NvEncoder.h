@@ -18,7 +18,6 @@ struct ID3D11Device;
 struct ID3D11Texture2D;
 class ID3D11ImmediateContextGate;
 class D3D11NvEncoder_Impl;
-class EncodeFrameQueue;
 
 
 // 공유 입력 풀의 keyed mutex 규약.
@@ -133,8 +132,18 @@ public:
 	// DoEncode 를 호출자가 직접 돌린다.
 	//
 	// Destroy 가 자동으로 멈추므로 종료 순서를 신경 쓸 필요가 없다.
-	bool StartEncodeThread(EncodeFrameQueue* queue);
+	bool StartEncodeThread();
 	void StopEncodeThread();
+
+	// 인코드 스레드가 꺼내 갈 프레임을 넣는다.
+	//
+	// 유입 큐는 latest-only 다. 아직 처리되지 않은 프레임이 있으면 그것을
+	// 버리고 이 프레임으로 교체한다 — 인코더가 밀렸을 때 오래된 화면을
+	// 내보내는 것보다 최신 화면을 내보내는 편이 낫기 때문이다.
+	// 버려진 프레임은 SetFrameReleaseCallback 콜백으로 돌아간다.
+	//
+	// 동기 파이프라인(enableAsyncPipeline = false)에서는 큐가 없어 항상 false 다.
+	bool EnqueueFrame(const NvEncInputFrame& frame, bool forceKeyFrame);
 
 	// =====================================================================
 	// 콜백 등록
@@ -146,6 +155,10 @@ public:
 	void SetErrorCallback(ErrorCallback callback, void* userData);
 
 	void SetKeyFrameRequestCallback(KeyFrameRequestCallback callback, void* userData);
+
+	// EnqueueFrame 으로 넘긴 프레임을 인코더가 다 썼거나 버렸을 때 부른다.
+	// 앱이 그 시점에 원본 자원(캡처 슬롯 등)을 반납한다.
+	void SetFrameReleaseCallback(NvEncFrameReleaseCallback callback, void* userData);
 
 	// =====================================================================
 	// 프레임 투입

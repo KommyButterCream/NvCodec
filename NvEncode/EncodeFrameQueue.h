@@ -6,23 +6,19 @@
 #include <Windows.h>
 #include <stdint.h>
 
+#include "NvEncPacket.h"
+
 #ifdef BUILD_D3D11_NVIDIA_CODEC_DLL
 #define D3D11_NVIDIA_ENCODER_API __declspec(dllexport)
 #else
 #define D3D11_NVIDIA_ENCODER_API __declspec(dllimport)
 #endif
 
-struct ID3D11Texture2D;
-
 class D3D11_NVIDIA_ENCODER_API EncodeFrameQueue
 {
 public:
-	struct InputFrameHandle
-	{
-		ID3D11Texture2D* texture = nullptr;
-		int64_t sourceSlotId = -1;
-		uint64_t frameId = 0ULL;
-	};
+	// 공개 입력 타입과 같은 것이다. 앱은 NvEncInputFrame 이라는 이름만 알면 된다.
+	using InputFrameHandle = NvEncInputFrame;
 
 	struct EncodeFrameItem
 	{

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 // 코덱은 H.264 고정이다. 엔코더와 짝을 맞춘다.
 
@@ -23,6 +24,8 @@ enum class NvDecErrorCode : uint32_t
 struct NvDecStats
 {
 	uint64_t parsedPackets = 0;          // Parse 호출 성공 횟수
+	uint64_t dequeuedFrames = 0;         // 유입 큐에서 디코드 스레드가 꺼낸 수
+	uint64_t droppedInputQueue = 0;      // 유입 큐가 가득 차 버린 수
 	uint64_t packetsFailed = 0;          // Parse 실패 횟수 (디코드 스레드를 쓸 때만)
 	uint64_t decodedFrames = 0;          // 텍스처까지 완성된 프레임 수
 	uint64_t deliveredFrames = 0;        // AcquireFrame 으로 앱에 나간 수
@@ -37,8 +40,29 @@ struct NvDecStats
 //
 // 디코더는 해상도를 스트림에서 읽어오므로 엔코더처럼 런타임 재설정할 항목이 없다.
 // 전부 Initialize 에서만 정한다.
+// 디코더에 넣는 비트스트림 한 덩어리.
+//
+// data 는 EnqueueFrame 이 반환할 때까지만 유효하면 된다 - 큐가 자기 버퍼로
+// 복사해 간다. 인코더 입력(NvEncInputFrame)이 참조만 싣는 것과 다른 점이다.
+// 그래서 디코더에는 반납 콜백이 없다.
+struct NvDecInputFrame
+{
+	const uint8_t* data = nullptr;
+	size_t size = 0;
+	uint64_t frameId = 0;
+	uint64_t timestamp = 0;
+	uint16_t frameType = 0;
+};
+
 struct NvDecConfig
 {
+	// 디코드 스레드가 꺼내 가는 유입 큐의 슬롯 수.
+	uint32_t inputQueueDepth = 8;
+
+	// 유입 큐가 슬롯마다 잡아 둘 버퍼 크기(바이트).
+	// 큐가 패킷을 자기 버퍼로 복사하므로 가장 큰 패킷이 들어갈 수 있어야 한다.
+	size_t maxPacketSize = 512 * 1024;
+
 	// 출력 슬롯 수. 2 의 n 승이며 최소 2.
 	//
 	// 앱이 ReleaseFrame 하지 않고 동시에 들고 있을 수 있는 프레임 수를 결정한다.

@@ -296,7 +296,7 @@ namespace Bench
 		}
 	};
 
-	void EncodeBench::OnReleaseFrame(EncodeFrameQueue::InputFrameHandle& frameHandle, void* userData)
+	void EncodeBench::OnReleaseFrame(NvEncInputFrame& frameHandle, void* userData)
 	{
 		Impl* impl = static_cast<Impl*>(userData);
 		if (impl)
@@ -446,6 +446,7 @@ namespace Bench
 		encoderConfig.width = config.width;
 		encoderConfig.height = config.height;
 		encoderConfig.encodeBufferCount = config.encodeBufferCount;
+		encoderConfig.inputQueueDepth = config.queueFrameCount;
 		encoderConfig.enableAsyncPipeline = config.asyncPipeline;
 		encoderConfig.latencyMode = config.latencyMode;
 		encoderConfig.profile = config.profile;
@@ -518,16 +519,11 @@ namespace Bench
 
 	bool EncodeBench::RunAsync(const BenchConfig& config, BenchResult& result, D3D11NvEncoder& encoder)
 	{
-		EncodeFrameQueue queue;
-		if (!queue.Initialize(config.queueFrameCount, OnReleaseFrame, m_impl))
-		{
-			printf_s("[BENCH ERROR] Queue Initialize failed. frameCount=%u\n", config.queueFrameCount);
-			return false;
-		}
-
-		// 결과 콜백은 엔코더에 직접 등록한다. 큐 펌프를 띄우기 전에 걸어 둔다.
+		// 유입 큐는 인코더가 소유한다. 깊이는 encoderConfig.inputQueueDepth 로 넘겼다.
+		// 결과 콜백과 반납 콜백을 큐 펌프를 띄우기 전에 걸어 둔다.
 		encoder.SetEncodedPacketCallback(OnEncodedFrame, m_impl);
-		if (!encoder.StartEncodeThread(&queue))
+		encoder.SetFrameReleaseCallback(OnReleaseFrame, m_impl);
+		if (!encoder.StartEncodeThread())
 		{
 			printf_s("[BENCH ERROR] StartEncodeThread failed.\n");
 			return false;
@@ -603,14 +599,14 @@ namespace Bench
 			const bool forceKeyFrame =
 				(config.keyFrameInterval > 0) && (frameIndex % config.keyFrameInterval == 0);
 
-			EncodeFrameQueue::InputFrameHandle handle = {};
+			NvEncInputFrame handle = {};
 			handle.texture = m_impl->patternTextures[static_cast<size_t>(slot)];
 			handle.sourceSlotId = slot;
 			handle.frameId = frameId;
 
 			m_impl->RecordEnqueue(frameId);
 
-			if (queue.EnqueueLatest(handle, forceKeyFrame))
+			if (encoder.EnqueueFrame(handle, forceKeyFrame))
 			{
 				result.enqueued++;
 			}
@@ -626,10 +622,12 @@ namespace Bench
 		// 인코더에 제출되지 않은 상태면 pending 이 0 이라 즉시 통과해버린다.
 		{
 			const int64_t drainDeadline = QpcNow() + static_cast<int64_t>(QpcTicksPerSecond() * 5.0);
-			uint32_t previousProcessCount = UINT32_MAX;
+			uint64_t previousProcessCount = UINT64_MAX;
 			while (QpcNow() < drainDeadline && !encoder.IsFaulted())
 			{
-				const uint32_t processCount = queue.GetProcessCount();
+				NvEncStats drainStats = {};
+				encoder.GetStats(drainStats);
+				const uint64_t processCount = drainStats.dequeuedFrames;
 				if (encoder.GetPendingFrameCount() == 0 && processCount == previousProcessCount)
 					break;   // 인코더가 비었고 큐도 더 움직이지 않는다.
 
@@ -642,8 +640,10 @@ namespace Bench
 
 		encoder.StopEncodeThread();
 
-		result.queueDropCount = queue.GetDropCount();
-		result.queueProcessCount = queue.GetProcessCount();
+		NvEncStats finalStats = {};
+		encoder.GetStats(finalStats);
+		result.queueDropCount = static_cast<uint32_t>(finalStats.droppedInputQueue);
+		result.queueProcessCount = static_cast<uint32_t>(finalStats.dequeuedFrames);
 		return true;
 	}
 

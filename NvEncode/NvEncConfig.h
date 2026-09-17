@@ -58,6 +58,11 @@ struct NvEncConfig
 	// 처리량은 2~8 에서 평평하므로 저지연 목적이면 2 가 유리하다.
 	uint32_t encodeBufferCount = 4;
 
+	// [init] 인코드 스레드가 꺼내 가는 유입 큐의 슬롯 수. 2 의 n 승이며 최소 2.
+	// 이 큐는 latest-only 라 어느 시점에도 QUEUED 1 개 + HELD 1 개만 쓰므로
+	// 2 로 충분하다. enableAsyncPipeline 이 false 면 큐를 만들지 않는다.
+	uint32_t inputQueueDepth = 4;
+
 	// [init] false 면 완료 스레드를 만들지 않는다.
 	// 호출자가 PrepareFrameForEncode + DoEncode 를 직접 돌려야 하고
 	// EncodeThread 와는 조합할 수 없다.

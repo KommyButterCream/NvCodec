@@ -100,8 +100,11 @@ public:
 	// 큐에서 프레임을 꺼내 이 엔코더에 밀어 넣는 워커를 시작한다.
 	// 결과는 SetEncodedPacketCallback 으로 이미 등록된 콜백으로 간다.
 	// Destroy 가 자동으로 멈추므로 호출자가 순서를 지킬 필요가 없다.
-	bool StartEncodeThread(EncodeFrameQueue* queue);
+	bool StartEncodeThread();
 	void StopEncodeThread();
+
+	// 유입. 인코드 스레드가 꺼내 간다.
+	bool EnqueueFrame(const NvEncInputFrame& frame, bool forceKeyFrame);
 
 	// =====================================================================
 	// 콜백 등록
@@ -109,6 +112,7 @@ public:
 	void SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData);
 	void SetErrorCallback(ErrorCallback callback, void* userData);
 	void SetKeyFrameRequestCallback(bool (*callback)(void*), void* userData);
+	void SetFrameReleaseCallback(NvEncFrameReleaseCallback callback, void* userData);
 
 	// =====================================================================
 	// 프레임 투입
@@ -186,6 +190,10 @@ private:
 
 	bool InitializeEncodeCompletionThread();
 	void DestroyEncodeCompletionThread();
+
+	bool InitializeInputQueue(uint32_t depth);
+	void DestroyInputQueue();
+	static void QueueFrameReleaseCallback(NvEncInputFrame& frame, void* userData);
 
 	// --- 인코드 파이프라인 ---
 	bool MapInputResource(uint32_t slot);
@@ -288,6 +296,10 @@ private:
 	// 동기 인코딩(PrepareFrameForEncode + DoEncode)에서는 nullptr 로 남는다.
 	EncodeThread* m_encodeThread = nullptr;
 
+	// 유입 큐. 소비자가 이 인코더 하나뿐이라 인코더가 소유한다.
+	// async 파이프라인일 때만 만들어진다.
+	EncodeFrameQueue* m_inputQueue = nullptr;
+
 	// =====================================================================
 	// 투입 측 — 엔코드 스레드가 쓴다
 	// =====================================================================
@@ -314,6 +326,9 @@ private:
 	volatile LONG m_acceptFrames = FALSE;
 	volatile LONG m_faulted = FALSE;
 	volatile LONG m_debugFailOutputCount = 0;
+
+	NvEncFrameReleaseCallback m_frameReleaseCallback = nullptr;
+	void* m_frameReleaseUserData = nullptr;
 
 	// =====================================================================
 	// 콜백 / 설정

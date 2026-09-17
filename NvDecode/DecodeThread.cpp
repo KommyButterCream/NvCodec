@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "DecodeThread.h"
 
 #include "D3D11NvDecoder_Impl.h"
@@ -20,12 +20,6 @@ bool DecodeThread::Initialize(DecodeFrameQueue* queue, D3D11NvDecoder_Impl* deco
 {
 	if (!queue || !decoder)
 		return false;
-
-	if (!queue->IsValid())
-	{
-		printf_s("[NVDEC ERROR] StartDecodeThread got a queue that failed to allocate.\n");
-		return false;
-	}
 
 	Shutdown();
 

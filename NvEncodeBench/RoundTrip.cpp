@@ -13,7 +13,6 @@
 #include "../NvDecode/D3D11NvDecoder.h"
 #include "../NvDecode/DecodeFrameQueue.h"
 #include "../NvEncode/D3D11NvEncoder.h"
-#include "../NvEncode/EncodeFrameQueue.h"
 
 namespace Bench
 {
@@ -313,7 +312,7 @@ namespace Bench
 
 	namespace
 	{
-		void OnReleaseSourceFrame(EncodeFrameQueue::InputFrameHandle& frameHandle, void* userData)
+		void OnReleaseSourceFrame(NvEncInputFrame& frameHandle, void* userData)
 		{
 			RoundTripBench::Impl* impl = static_cast<RoundTripBench::Impl*>(userData);
 			if (impl)
@@ -324,7 +323,7 @@ namespace Bench
 		void OnEncodedFrame(const NvEncPacket& frame, void* userData)
 		{
 			RoundTripBench::Impl* impl = static_cast<RoundTripBench::Impl*>(userData);
-			if (!impl || !impl->decodeQueue)
+			if (!impl || (!impl->decodeQueue && !impl->decoder))
 				return;
 
 			::EnterCriticalSection(&impl->statsLock);
@@ -335,7 +334,7 @@ namespace Bench
 			}
 			::LeaveCriticalSection(&impl->statsLock);
 
-			DecodeFrameQueue::InputFrameHandle handle = {};
+			NvDecInputFrame handle = {};
 			handle.data = frame.data;
 			handle.size = frame.size;
 			handle.frameId = frame.frameId;
@@ -349,7 +348,12 @@ namespace Bench
 
 			// EnqueueFrame 은 데이터를 자기 버퍼로 복사한다.
 			// 그래서 packet.data 가 콜백 반환 뒤에 재사용돼도 안전하다.
-			if (!impl->decodeQueue->EnqueueFrame(handle))
+			// hold/leak 모드면 벤치 큐로, 기본 모드면 디코더가 소유한 큐로 간다.
+			const bool enqueued = impl->decodeQueue
+				? impl->decodeQueue->EnqueueFrame(handle)
+				: impl->decoder->EnqueueFrame(handle);
+
+			if (!enqueued)
 			{
 				::EnterCriticalSection(&impl->statsLock);
 				if (impl->result)
@@ -520,6 +524,8 @@ namespace Bench
 
 		// ---- 디코더 ----
 		NvDecConfig decoderConfig;
+		decoderConfig.inputQueueDepth = static_cast<uint32_t>(kDecodeQueueSlots);
+		decoderConfig.maxPacketSize = kDecodeSlotBytes;
 		decoderConfig.outputSlotCount = config.decodeSlotCount;
 		decoderConfig.sharedOutputTextureMode = false;
 
@@ -534,28 +540,33 @@ namespace Bench
 		decoder.SetErrorCallback(OnDecoderError, m_impl);
 		m_impl->decoder = &decoder;
 
-		DecodeFrameQueue decodeQueue(kDecodeSlotBytes, kDecodeQueueSlots);
-		if (!decodeQueue.IsValid())
-		{
-			printf_s("[ROUNDTRIP ERROR] DecodeFrameQueue allocation failed.\n");
-			decoder.Destroy();
-			m_impl->config = nullptr;
-			m_impl->result = nullptr;
-			return false;
-		}
-		m_impl->decodeQueue = &decodeQueue;
-
 		// 프레임 반납 방식 두 가지 중 하나를 고른다.
 		//   기본        : 디코더 내장 큐 펌프. 콜백이 반환하면 곧바로 반납한다.
 		//   hold / leak : HoldingDrainThread. 앱이 여러 장을 동시에 들고 있는 경우.
 		const bool useHoldingDrain = (config.holdFrameCount > 1U) || config.leakFrames;
+
+		// hold/leak 모드는 소비자를 벤치가 직접 돌리므로 큐도 벤치가 갖는다.
+		// 기본 모드는 디코더가 자기 큐를 쓰므로 여기서는 만들지 않는다.
+		DecodeFrameQueue benchQueue;
+		if (useHoldingDrain)
+		{
+			if (!benchQueue.Initialize(kDecodeQueueSlots, kDecodeSlotBytes))
+			{
+				printf_s("[ROUNDTRIP ERROR] bench decode queue allocation failed.\n");
+				decoder.Destroy();
+				m_impl->config = nullptr;
+				m_impl->result = nullptr;
+				return false;
+			}
+			m_impl->decodeQueue = &benchQueue;
+		}
 
 		std::unique_ptr<HoldingDrainThread> holdingDrain;
 
 		if (useHoldingDrain)
 		{
 			holdingDrain.reset(new HoldingDrainThread(
-				&decoder, &decodeQueue,
+				&decoder, &benchQueue,
 				config.holdFrameCount, config.leakFrames,
 				OnDecodedFrame, m_impl));
 
@@ -571,7 +582,7 @@ namespace Bench
 		else
 		{
 			decoder.SetFrameCallback(OnDecodedFrame, m_impl);
-			if (!decoder.StartDecodeThread(&decodeQueue))
+			if (!decoder.StartDecodeThread())
 			{
 				printf_s("[ROUNDTRIP ERROR] StartDecodeThread failed.\n");
 				decoder.Destroy();
@@ -594,6 +605,7 @@ namespace Bench
 		encoderConfig.width = config.width;
 		encoderConfig.height = config.height;
 		encoderConfig.encodeBufferCount = config.encodeBufferCount;
+		encoderConfig.inputQueueDepth = 2;
 		encoderConfig.averageBitrateBps = config.bitrateBps;
 		encoderConfig.frameRateNumerator = (config.targetFps > 0) ? config.targetFps : 60U;
 		encoderConfig.frameRateDenominator = 1;
@@ -609,20 +621,9 @@ namespace Bench
 			return false;
 		}
 
-		EncodeFrameQueue encodeQueue;
-		if (!encodeQueue.Initialize(2, OnReleaseSourceFrame, m_impl))
-		{
-			printf_s("[ROUNDTRIP ERROR] EncodeFrameQueue Initialize failed.\n");
-			encoder.Destroy();
-			shutdownDrain();
-			decoder.Destroy();
-			m_impl->config = nullptr;
-			m_impl->result = nullptr;
-			return false;
-		}
-
 		encoder.SetEncodedPacketCallback(OnEncodedFrame, m_impl);
-		if (!encoder.StartEncodeThread(&encodeQueue))
+		encoder.SetFrameReleaseCallback(OnReleaseSourceFrame, m_impl);
+		if (!encoder.StartEncodeThread())
 		{
 			printf_s("[ROUNDTRIP ERROR] StartEncodeThread failed.\n");
 			encoder.Destroy();
@@ -680,14 +681,14 @@ namespace Bench
 
 			const uint64_t frameId = static_cast<uint64_t>(frameIndex);
 
-			EncodeFrameQueue::InputFrameHandle handle = {};
+			NvEncInputFrame handle = {};
 			handle.texture = m_impl->patternTextures[static_cast<size_t>(sourceSlot)];
 			handle.sourceSlotId = sourceSlot;
 			handle.frameId = frameId;
 
 			m_impl->RecordEncodeSubmit(frameId);
 
-			if (encodeQueue.EnqueueLatest(handle, frameIndex == 0))
+			if (encoder.EnqueueFrame(handle, frameIndex == 0))
 			{
 				++enqueuedCount;
 			}
@@ -739,7 +740,11 @@ namespace Bench
 				// deliveredFrames 가 아니라 parsedPackets 을 본다.
 				// 풀 고갈 등으로 버려진 프레임은 영영 도착하지 않으므로,
 				// 전달 수를 기다리면 여기서 타임아웃까지 매달린다.
-				const uint64_t accounted = stats.parsedPackets + decodeQueue.GetDropCount();
+				// 두 모드 중 실제로 쓰인 큐의 드롭을 센다.
+				const uint64_t queueDropped = useHoldingDrain
+					? benchQueue.GetDropCount()
+					: stats.droppedInputQueue;
+				const uint64_t accounted = stats.parsedPackets + queueDropped;
 				if (accounted >= result.encodedPackets || decoder.IsFaulted())
 					break;
 
@@ -765,7 +770,9 @@ namespace Bench
 		decoder.GetStats(result.decoderStats);
 		result.encoderFaulted = result.encoderStats.faulted;
 		result.decoderFaulted = result.decoderStats.faulted;
-		result.decodeQueueDropped = decodeQueue.GetDropCount();
+		result.decodeQueueDropped = useHoldingDrain
+			? benchQueue.GetDropCount()
+			: result.decoderStats.droppedInputQueue;
 		result.gateEnterCount = m_impl->gate.GetEnterCount();
 		result.gateRecursiveEnterCount = m_impl->gate.GetRecursiveEnterCount();
 		result.contendAcquireCount = contender.GetAcquireCount();

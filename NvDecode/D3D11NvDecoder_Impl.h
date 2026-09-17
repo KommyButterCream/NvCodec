@@ -25,10 +25,10 @@ public:
 	{
 		bool isInitialized = false;
 
-		cudaVideoCodec eCodec = cudaVideoCodec::cudaVideoCodec_H264;
-		cudaVideoChromaFormat eChromaFormat = cudaVideoChromaFormat::cudaVideoChromaFormat_420;
-		cudaVideoSurfaceFormat eOutputFormat = cudaVideoSurfaceFormat::cudaVideoSurfaceFormat_NV12;
-		cudaVideoDeinterlaceMode eInterlaceMode = cudaVideoDeinterlaceMode::cudaVideoDeinterlaceMode_Weave;
+		cudaVideoCodec codec = cudaVideoCodec::cudaVideoCodec_H264;
+		cudaVideoChromaFormat chromaFormat = cudaVideoChromaFormat::cudaVideoChromaFormat_420;
+		cudaVideoSurfaceFormat outputFormat = cudaVideoSurfaceFormat::cudaVideoSurfaceFormat_NV12;
+		cudaVideoDeinterlaceMode interlaceMode = cudaVideoDeinterlaceMode::cudaVideoDeinterlaceMode_Weave;
 
 		uint8_t bitDepthMinus8 = 0;
 		uint32_t bitsPerPixel = 0;
@@ -123,7 +123,7 @@ private:
 	int32_t OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo);
 
 	// --- 초기화 / 리소스 생성 ---
-	bool CreateCudaContext();
+	bool CreateCudaResources();
 
 	bool CreateOutputSlots();
 	void DestroyOutputSlots();
@@ -139,7 +139,7 @@ private:
 	// --- 재설정 ---
 	// 반환값은 OnVideoSequence 가 파서에 그대로 돌려줄 값이다.
 	// SequenceResult::Failed 면 실패, 그 외에는 decode surface 수.
-	int32_t ReconfigureDecoder(CUVIDEOFORMAT* videoFormat);
+	int32_t ReconfigureForVideoFormat(CUVIDEOFORMAT* videoFormat);
 
 	// --- 오류 / 콜백 통지 ---
 	void EnterFaultedState(NvDecErrorCode errorCode);
@@ -148,7 +148,8 @@ private:
 	void ResetLostFrameStreak();
 
 	// --- 조회 ---
-	// FIFO 로 다음에 쓸 슬롯. 앱이 들고 있으면 쓸 수 없다.
+	// 출력 슬롯 링의 두 커서. Input 은 다음에 쓸 슬롯이고 — 앱이 들고 있으면
+	// 쓸 수 없다 — Output 은 AcquireFrame 이 다음에 꺼낼 슬롯이다.
 	uint32_t GetInputSlotIndex() const;
 	uint32_t GetOutputSlotIndex() const;
 	bool IsSlotHeldByApp(uint32_t slot) const;
@@ -171,10 +172,11 @@ private:
 	CUvideoctxlock m_videoContextLock = nullptr;
 	CUstream m_cudaStream = nullptr;
 
-	CUvideodecoder m_decoder = nullptr;
-	CUvideoparser m_parser = nullptr;
+	CUvideodecoder m_decoderHandle = nullptr;
+	CUvideoparser m_parserHandle = nullptr;
 
-	NvDecConfig m_config = {};
+	// 앱이 준 설정 원본.
+	NvDecConfig m_userConfig = {};
 
 	// =====================================================================
 	// 출력 슬롯 리소스
@@ -182,16 +184,18 @@ private:
 	uint32_t m_outputSlotCount = 0;
 	CUevent m_decodeCompleteEvents[kMaxOutputSlotCount] = {};
 	ID3D11Texture2D* m_outputTextures[kMaxOutputSlotCount] = {};
-	CUgraphicsResource m_cudaResources[kMaxOutputSlotCount] = {};
+	CUgraphicsResource m_cudaOutputResources[kMaxOutputSlotCount] = {};
 	CUdeviceptr m_bgraStagingBuffers[kMaxOutputSlotCount] = {};
-	Frame m_frames[kMaxOutputSlotCount] = {};
+	Frame m_outputFrames[kMaxOutputSlotCount] = {};
 
 	size_t m_bgraStagingPitch = 0;
 
-	uint32_t m_cachedTextureWidth = 0;
-	uint32_t m_cachedTextureHeight = 0;
+	uint32_t m_outputTextureWidth = 0;
+	uint32_t m_outputTextureHeight = 0;
 
-	CUVIDEOFORMAT m_cuVideoFormat = {};
+	// NVDEC 가 준 원본 포맷과, 그것을 이 클래스가 쓰기 좋게 풀어 둔 사본.
+	// 스트림 포맷이 바뀌었는지는 원본끼리 비교해서 판단한다.
+	CUVIDEOFORMAT m_currentVideoFormat = {};
 	VideoFormatDesc m_videoFormatDesc = {};
 
 	// =====================================================================

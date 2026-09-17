@@ -1804,12 +1804,16 @@ bool D3D11NvEncoder_Impl::ReadEncodedBitstream(uint32_t slot, NvEncPacket& packe
 
 	// Encode Result 를 가져오기 위해 NVENC 내부 Bitstream Buffer Lock
 	//
-	// Lock/Unlock 이 D3D11 컨텍스트를 타는지는 드라이버 내부라 확인할 수 없다.
-	// 비트스트림 버퍼는 NVENC 가 자체 할당한 것이라 등록된 D3D11 리소스를
-	// 만지지 않을 가능성이 높지만, 게이트 획득 비용이 수십 ns 수준이므로
-	// multithread protection 을 끈 환경에서는 방어적으로 감싸는 편이 낫다.
-	// Lock -> memcpy -> Unlock 을 한 번의 획득으로 묶어 시퀀스 원자성도 얻는다.
-	D3D11ImmediateContextGuard contextGuard(m_contextGate);
+	// 여기서는 컨텍스트 게이트를 잡지 않는다.
+	//
+	// 이 함수가 만지는 것은 CreateBitstreamBuffers 가 nvEncCreateBitstreamBuffer
+	// 로 받아 둔 NVENC 자체 버퍼뿐이다. 등록된 D3D11 리소스는 호출 경로에
+	// 등장하지 않으므로 immediate context 와 무관하다.
+	// (D3D11 리소스를 건드리는 UnmapInputResource 는 그래서 게이트를 유지한다)
+	//
+	// 게이트를 잡으면 이 구간 전체 — 패킷 memcpy 까지 — 가 엔코드 스레드의
+	// 다음 CopyResource 를 막는다. 완료 스레드가 게이트를 잡는 구간 중
+	// 가장 길어서, 두 스레드가 실제로 부딪히는 곳이 여기였다.
 
 	NV_ENC_LOCK_BITSTREAM lockBitstreamData = {};
 	lockBitstreamData.version = NV_ENC_LOCK_BITSTREAM_VER;

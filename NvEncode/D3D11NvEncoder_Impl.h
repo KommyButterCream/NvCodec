@@ -14,6 +14,7 @@
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct ID3D11Texture2D;
+struct IDXGIKeyedMutex;
 class ID3D11ImmediateContextGate;
 class D3D11VideoProcessorNV12;
 class EncodeCompletionThread;
@@ -63,48 +64,84 @@ public:
 	using EncodedPacketCallback = void (*)(const NvEncPacket& packet, void* userData);
 	using ErrorCallback = void (*)(NvEncErrorCode errorCode, void* userData);
 
+	// =====================================================================
+	// 생성 / 소멸
+	// =====================================================================
 	D3D11NvEncoder_Impl() = default;
 	~D3D11NvEncoder_Impl();
 
 	D3D11NvEncoder_Impl(const D3D11NvEncoder_Impl&) = delete;
 	D3D11NvEncoder_Impl& operator=(const D3D11NvEncoder_Impl&) = delete;
 
+	// =====================================================================
+	// 초기화 / 종료
+	// =====================================================================
 	bool Initialize(
 		ID3D11Device* device,
 		const NvEncConfig& config,
 		ID3D11ImmediateContextGate* contextGate);
-	NvEncReconfigureResult Reconfigure(const NvEncConfig& config, bool forceIdr);
-	void GetConfig(NvEncConfig& config) const;
 	void Destroy();
 
-	void SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData);
-	void SetErrorCallback(ErrorCallback callback, void* userData);
-	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
-	void RequestKeyFrame();
-	bool CanSubmitFrame() const;
-	bool SubmitFrame(uint64_t frameId);
-	uint32_t GetPendingFrameCount() const;
-	bool WaitForPendingFrames(uint32_t timeoutMilliseconds) const;
-	bool IsAsyncPipelineEnabled() const;
-	bool DoEncode(NvEncPacket& encodeResultPacket);
+	// =====================================================================
+	// 재설정
+	// =====================================================================
+	NvEncReconfigureResult Reconfigure(const NvEncConfig& config, bool forceIdr);
 
-	bool IsFaulted() const;
-	void GetStats(NvEncStats& stats) const;
+	// =====================================================================
+	// 공유 입력 풀 (생산자 디바이스 연결)
+	// =====================================================================
+	bool RegisterSharedInputPool(const HANDLE* sharedHandles, uint32_t count);
+	void DestroySharedInputPool();
+
+	// =====================================================================
+	// 인코드 스레드 제어
+	// =====================================================================
 
 	// 큐에서 프레임을 꺼내 이 엔코더에 밀어 넣는 워커를 시작한다.
 	// 결과는 SetEncodedPacketCallback 으로 이미 등록된 콜백으로 간다.
 	// Destroy 가 자동으로 멈추므로 호출자가 순서를 지킬 필요가 없다.
 	bool StartEncodeThread(EncodeFrameQueue* queue);
 	void StopEncodeThread();
+
+	// =====================================================================
+	// 콜백 등록
+	// =====================================================================
+	void SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData);
+	void SetErrorCallback(ErrorCallback callback, void* userData);
 	void SetKeyFrameRequestCallback(bool (*callback)(void*), void* userData);
+
+	// =====================================================================
+	// 프레임 투입
+	// =====================================================================
+	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
+	bool PrepareFrameForEncodeFromSharedSlot(uint32_t slot);
+	void RequestKeyFrame();
+	bool SubmitFrame(uint64_t frameId);
+	bool DoEncode(NvEncPacket& encodeResultPacket);
+	bool WaitForPendingFrames(uint32_t timeoutMilliseconds) const;
+
+	// =====================================================================
+	// 통계 / 진단
+	// =====================================================================
+	void GetStats(NvEncStats& stats) const;
 	void DebugFailNextOutputs(uint32_t count);
 
-private:
-	// 게이트를 획득한 상태에서 호출된다. 내부에서 게이트를 다시 잡아서는 안 된다.
-	bool InitializeEncoderResources();
+	// =====================================================================
+	// 상태 / 설정 조회
+	// =====================================================================
+	void GetConfig(NvEncConfig& config) const;
+	bool CanSubmitFrame() const;
+	uint32_t GetPendingFrameCount() const;
+	bool IsAsyncPipelineEnabled() const;
+	bool IsFaulted() const;
 
+private:
+	// --- 초기화 / 리소스 생성 ---
 	bool LoadNvEncApi();
 	bool OpenEncodeSession();
+
+	// 게이트를 획득한 상태에서 호출된다. 내부에서 게이트를 다시 잡아서는 안 된다.
+	bool InitializeEncoderResources();
 
 	// NvEncConfig 를 NVENC 구조체로 옮긴다. Initialize 와 Reconfigure 가 공유한다.
 	// [init] 필드까지 채우는 것은 Initialize 뿐이고, Reconfigure 는 rate control 만 갱신한다.
@@ -143,19 +180,28 @@ private:
 	bool InitializePacketBuffers();
 	void DestroyPacketBuffers();
 	void ReleasePacketBuffer(NvEncPacketBuffer& frame);
+
 	bool InitializePendingFrames();
 	void DestroyPendingFrames();
+
 	bool InitializeEncodeCompletionThread();
 	void DestroyEncodeCompletionThread();
+
+	// --- 인코드 파이프라인 ---
+	bool MapInputResource(uint32_t slot);
+	bool UnmapInputResource(uint32_t slot);
+
+	bool EncodePicture(uint32_t slot);
+	NvEncPacketStatus WaitForEncodeCompletion(uint32_t slot, bool block);
+	bool ReadEncodedBitstream(uint32_t slot, NvEncPacket& packet);
+	bool Flush();
+
 	NvEncOutputResult ProcessOneOutput(bool block, bool invokeCallback, NvEncPacket* outPacket = nullptr);
 	void ClearPendingFrame(uint32_t slot);
 	void AbortPendingFrames();
-	void EnterFaultedState(NvEncErrorCode errorCode);
-	bool ConsumeDebugOutputFailure();
 	void SignalAllSlotsFree();
-	void InvokeEncodedPacketCallback(const NvEncPacket& packet);
-	void InvokeErrorCallback(NvEncErrorCode errorCode);
 
+	// --- 입력 리소스 등록 ---
 	bool RegisterResource(void* buffer, NV_ENC_INPUT_RESOURCE_TYPE eResourceType,
 		uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT eBufferFormat, NV_ENC_BUFFER_USAGE eBufferUsage,
 		NV_ENC_REGISTERED_PTR& registeredResource);
@@ -166,16 +212,18 @@ private:
 	bool SetNV12OutputTexture(ID3D11Texture2D** textures, uint32_t bufferCount);
 	bool SetBGRAInputTexture(ID3D11Texture2D** textures, uint32_t bufferCount);
 
+	// --- 오류 / 콜백 통지 ---
+	void EnterFaultedState(NvEncErrorCode errorCode);
+	void InvokeEncodedPacketCallback(const NvEncPacket& packet);
+	void InvokeErrorCallback(NvEncErrorCode errorCode);
+
+	// --- 진단 ---
+	bool ConsumeDebugOutputFailure();
+
+	// --- 조회 ---
 	uint32_t GetInputSlotIndex() const;
 	uint32_t GetOutputSlotIndex() const;
-
-	bool MapInputResource(uint32_t slot);
-	bool UnmapInputResource(uint32_t slot);
-
-	bool EncodePicture(uint32_t slot);
-	NvEncPacketStatus WaitForEncodeCompletion(uint32_t slot, bool block);
-	bool ReadEncodedBitstream(uint32_t slot, NvEncPacket& packet);
-	bool Flush();
+	HANDLE GetCompletionEvent(uint32_t slot);
 
 	int32_t GetCapabilityValue(GUID guidCodec, NV_ENC_CAPS capsToQuery);
 	uint32_t GetEncodeWidth() const;
@@ -184,9 +232,11 @@ private:
 	uint32_t GetMaxEncodeHeight() const;
 	NV_ENC_BUFFER_FORMAT GetPixelFormat() const;
 	DXGI_FORMAT GetD3D11Format(NV_ENC_BUFFER_FORMAT eBufferFormat) const;
-	HANDLE GetCompletionEvent(uint32_t slot);
 
 private:
+	// =====================================================================
+	// 초기화 시점에 정해지고 이후 바뀌지 않는 것들
+	// =====================================================================
 	ID3D11Device* m_D3D11Device = nullptr;
 	ID3D11DeviceContext* m_D3D11Context = nullptr;
 	ID3D11ImmediateContextGate* m_contextGate = nullptr;
@@ -194,11 +244,37 @@ private:
 	void* m_encoderHandle = nullptr;
 	NV_ENCODE_API_FUNCTION_LIST m_nvenc = {};
 
-	D3D11VideoProcessorNV12* m_converter = nullptr;
-
 	NV_ENC_INITIALIZE_PARAMS m_initParameters = {};
 	NV_ENC_CONFIG m_config = {};
 
+	uint32_t m_width = 0;
+	uint32_t m_height = 0;
+	uint32_t m_encodeBufferCount = 1;
+	bool m_asyncPipelineEnabled = true;
+
+	// =====================================================================
+	// 슬롯 리소스
+	// =====================================================================
+	D3D11VideoProcessorNV12* m_converter = nullptr;
+
+	NvEncPacketBuffer* m_packetBuffers = nullptr;
+	NvEncPendingFrame* m_pendingFrames = nullptr;
+	NV_ENC_REGISTERED_PTR* m_registeredResources = nullptr;
+	NV_ENC_INPUT_PTR* m_mappedInputBuffers = nullptr;
+	NV_ENC_OUTPUT_PTR* m_bitstreamBuffers = nullptr;
+
+	ID3D11Texture2D** m_bgraTextures = nullptr;
+	ID3D11Texture2D** m_nv12Textures = nullptr;
+
+	// 생산자 디바이스가 만든 공유 텍스처를 이 디바이스에서 연 결과.
+	// RegisterSharedInputPool 에서 한 번 채우고 Destroy 까지 그대로 둔다.
+	ID3D11Texture2D** m_sharedInputTextures = nullptr;
+	IDXGIKeyedMutex** m_sharedInputMutexes = nullptr;
+	uint32_t m_sharedInputCount = 0;
+
+	// =====================================================================
+	// 이벤트 / 스레드
+	// =====================================================================
 	HANDLE* m_slotCompletionEvents = nullptr;
 	HANDLE m_eosCompletionEvent = nullptr;
 
@@ -212,38 +288,44 @@ private:
 	// 동기 인코딩(PrepareFrameForEncode + DoEncode)에서는 nullptr 로 남는다.
 	EncodeThread* m_encodeThread = nullptr;
 
-	uint32_t m_encodeBufferCount = 1;
-	NvEncPacketBuffer* m_packetBuffers = nullptr;
-	NvEncPendingFrame* m_pendingFrames = nullptr;
-	NV_ENC_REGISTERED_PTR* m_registeredResources = nullptr;
-	NV_ENC_INPUT_PTR* m_mappedInputBuffers = nullptr;
-	NV_ENC_OUTPUT_PTR* m_bitstreamBuffers = nullptr;
-
-	ID3D11Texture2D** m_bgraTextures = nullptr;
-	ID3D11Texture2D** m_nv12Textures = nullptr;
-
-	uint64_t m_timeStamp = 0;
+	// =====================================================================
+	// 투입 측 — 엔코드 스레드가 쓴다
+	// =====================================================================
+	alignas(64) uint64_t m_timeStamp = 0;
 	uint32_t m_inputSequence = 0;
-	uint32_t m_outputSequence = 0;
-	alignas(4) volatile LONG m_pendingFrameCount = 0;
-	alignas(4) volatile LONG m_forceKeyFrame = FALSE;
-	alignas(4) volatile LONG m_acceptFrames = FALSE;
-	alignas(4) volatile LONG m_faulted = FALSE;
-	alignas(4) volatile LONG m_debugFailOutputCount = 0;
-	alignas(8) volatile LONG64 m_submittedFrameCount = 0;
-	alignas(8) volatile LONG64 m_completedFrameCount = 0;
-	alignas(8) volatile LONG64 m_lostFrameCount = 0;
-	bool m_asyncPipelineEnabled = true;
-	EncodedPacketCallback m_encodedPacketCallback = nullptr;
+	volatile LONG64 m_submittedFrameCount = 0;
+
+	// =====================================================================
+	// 완료 측 — 완료 스레드가 쓴다
+	// =====================================================================
+	alignas(64) uint32_t m_outputSequence = 0;
+	volatile LONG64 m_completedFrameCount = 0;
+	volatile LONG64 m_lostFrameCount = 0;
+
+	// =====================================================================
+	// 양쪽이 함께 갱신하는 동기 카운터
+	// =====================================================================
+	alignas(64) volatile LONG m_pendingFrameCount = 0;
+
+	// =====================================================================
+	// 읽기 위주 플래그
+	// =====================================================================
+	alignas(64) volatile LONG m_forceKeyFrame = FALSE;
+	volatile LONG m_acceptFrames = FALSE;
+	volatile LONG m_faulted = FALSE;
+	volatile LONG m_debugFailOutputCount = 0;
+
+	// =====================================================================
+	// 콜백 / 설정
+	// =====================================================================
+	alignas(64) EncodedPacketCallback m_encodedPacketCallback = nullptr;
 	void* m_encodedPacketCallbackUserData = nullptr;
 	ErrorCallback m_errorCallback = nullptr;
 	void* m_errorCallbackUserData = nullptr;
 	SRWLOCK m_callbackLock = SRWLOCK_INIT;
 
-	uint32_t m_width = 0;
-	uint32_t m_height = 0;
-
 	// 앱이 준 설정 원본. Reconfigure 가 [init] 필드 변경을 감지하는 기준이 된다.
 	NvEncConfig m_userConfig = {};
 	mutable SRWLOCK m_configLock = SRWLOCK_INIT;
 };
+

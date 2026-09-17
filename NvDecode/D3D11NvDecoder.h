@@ -46,11 +46,18 @@ public:
 	// AcquireFrame / ReleaseFrame 을 직접 호출해야 한다.
 	using FrameCallback = void (*)(const Frame& frame, void* userData);
 
+	// =====================================================================
+	// 생성 / 소멸
+	// =====================================================================
 	D3D11NvDecoder();
 	~D3D11NvDecoder();
 
 	D3D11NvDecoder(const D3D11NvDecoder&) = delete;
 	D3D11NvDecoder& operator=(const D3D11NvDecoder&) = delete;
+
+	// =====================================================================
+	// 초기화 / 종료
+	// =====================================================================
 
 	// contextGate 는 이 device 의 immediate context 를 쓰는 모든 주체가
 	// 공유하는 게이트여야 한다. 디코더는 CUDA-D3D11 interop 으로
@@ -73,11 +80,38 @@ public:
 
 	void Destroy();
 
+	// =====================================================================
+	// 디코드 스레드 제어
+	// =====================================================================
+
+	// 큐에서 패킷을 꺼내 이 디코더에 먹이는 워커를 시작한다.
+	// 결과는 SetFrameCallback 으로 등록한 콜백에 도착한다.
+	// Destroy 가 자동으로 멈추므로 종료 순서를 신경 쓸 필요가 없다.
+	bool StartDecodeThread(DecodeFrameQueue* queue);
+	void StopDecodeThread();
+
+	// =====================================================================
+	// 콜백 등록
+	// =====================================================================
+	void SetFrameCallback(FrameCallback callback, void* userData);
+
+	// 프레임을 유실하거나 파이프라인이 정지했을 때 통지받는다.
+	// 콜백은 디코드 스레드에서 호출되므로 블로킹 작업을 하면 안 된다.
+	void SetErrorCallback(ErrorCallback callback, void* userData);
+
+	// =====================================================================
+	// 비트스트림 투입
+	// =====================================================================
+
 	// timestamp 는 NVDEC 를 그대로 통과해 Frame::timestamp 로 돌아온다.
 	// 앱이 디코딩 결과를 원본 프레임과 짝짓는 유일한 수단이다.
 	// (예전에는 CUVID_PKT_TIMESTAMP 플래그만 세우고 값을 넣지 않아 항상 0 이었다.)
 	bool Parse(const uint8_t* data, uint32_t size, uint64_t timestamp = 0,
 		bool endOfPicture = true, bool endOfStream = false, bool discontinuity = false);
+
+	// =====================================================================
+	// 프레임 수신
+	// =====================================================================
 
 	// 준비된 프레임을 하나 꺼낸다. 없으면 nullptr.
 	// 반환된 프레임은 반드시 ReleaseFrame 으로 돌려줘야 한다.
@@ -86,17 +120,9 @@ public:
 	// AcquireFrame 으로 받은 프레임을 반납한다. 슬롯이 다시 쓰인다.
 	void ReleaseFrame(Frame* frame);
 
-	// 프레임을 유실하거나 파이프라인이 정지했을 때 통지받는다.
-	// 콜백은 디코드 스레드에서 호출되므로 블로킹 작업을 하면 안 된다.
-	void SetErrorCallback(ErrorCallback callback, void* userData);
-
-	// 큐에서 패킷을 꺼내 이 디코더에 먹이는 워커를 시작한다.
-	// 결과는 SetFrameCallback 으로 등록한 콜백에 도착한다.
-	// Destroy 가 자동으로 멈추므로 종료 순서를 신경 쓸 필요가 없다.
-	bool StartDecodeThread(DecodeFrameQueue* queue);
-	void StopDecodeThread();
-	void SetFrameCallback(FrameCallback callback, void* userData);
-
+	// =====================================================================
+	// 통계 / 상태 조회
+	// =====================================================================
 	void GetStats(NvDecStats& stats) const;
 
 	// true 면 이후 디코딩이 진행되지 않는다. 복구하려면 Destroy 후 재초기화.

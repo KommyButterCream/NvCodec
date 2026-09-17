@@ -84,15 +84,21 @@ private:
 	EncodeFrameItem* m_items = nullptr;
 	SlotState* m_states = nullptr;
 
+	// =====================================================================
+	// m_lock 이 지키는 큐 인덱스
+	// =====================================================================
 	alignas(64) uint32_t m_writePos = 0;
-	alignas(64) uint32_t m_readPos = 0;
-	alignas(64) uint32_t m_queuedCount = 0;
-	alignas(64) uint32_t m_heldPos = 0;
-	alignas(4) volatile LONG m_hasHeldFrame = FALSE;
+	uint32_t m_readPos = 0;
+	uint32_t m_queuedCount = 0;
+	uint32_t m_heldPos = 0;
+	volatile LONG m_hasHeldFrame = FALSE;
 
-	alignas(4) volatile LONG m_running = FALSE;
-	alignas(4) volatile LONG m_dropCount = 0;
-	alignas(4) volatile LONG m_processCount = 0;
+	// =====================================================================
+	// 락 없이 읽히는 상태 / 카운터
+	// =====================================================================
+	alignas(64) volatile LONG m_running = FALSE;
+	volatile LONG m_dropCount = 0;
+	volatile LONG m_processCount = 0;
 
 	ReleaseFrameCallback m_releaseCallback = nullptr;
 	void* m_releaseCallbackUserData = nullptr;

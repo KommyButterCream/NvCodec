@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "EncodeThread.h"
 
 #include "D3D11NvEncoder_Impl.h"
@@ -160,9 +160,23 @@ void EncodeThread::Run()
 		}
 
 		bool prepareSucceeded = false;
+
+		// 입력이 두 가지다.
+		//
+		//   texture 가 있으면 우리 디바이스의 텍스처다(예전 경로).
+		//   없으면 sourceSlotId 가 공유 풀의 슬롯 번호다.
+		//
+		// 후자가 캡처와 인코더가 서로 다른 D3D11 디바이스를 쓰는 구성이다.
+		// 그때 texture 포인터는 남의 디바이스 것이라 여기서 쓸 수 없고,
+		// 실제로 앱이 nullptr 로 채워 보낸다.
 		if (frameItem->frameHandle.texture)
 		{
 			prepareSucceeded = m_encoder->PrepareFrameForEncode(frameItem->frameHandle.texture);
+		}
+		else if (frameItem->frameHandle.sourceSlotId >= 0)
+		{
+			prepareSucceeded = m_encoder->PrepareFrameForEncodeFromSharedSlot(
+				static_cast<uint32_t>(frameItem->frameHandle.sourceSlotId));
 		}
 
 		m_encodeFrameQueue->ReleaseReadFrame();

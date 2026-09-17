@@ -130,7 +130,18 @@ bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool f
 	// 외부에서 받아온 FrameHandle 을 참조하여 사용만 하고
 	// ReleaseFrameHandle 로 반환 해주어야 한다.
 
-	if (!m_items || !m_states || !frameHandle.texture)
+	if (!m_items || !m_states)
+		return false;
+
+	// 프레임을 가리키는 방법이 두 가지다.
+	//
+	//   texture      : 인코더와 같은 디바이스의 텍스처를 직접 넘기는 경로
+	//   sourceSlotId : 다른 디바이스가 만든 공유 풀의 슬롯 번호
+	//
+	// 예전에는 texture 만 있었고 여기서 null 을 거절했다. 캡처와 인코더가
+	// 서로 다른 디바이스를 쓰게 되면서 texture 포인터를 그대로 넘길 수
+	// 없게 됐고(남의 디바이스 것이다), 그때부터 슬롯 번호가 정식 입력이다.
+	if (!frameHandle.texture && frameHandle.sourceSlotId < 0)
 		return false;
 
 	if (::ReadAcquire(&m_running) == FALSE)
@@ -263,7 +274,9 @@ void EncodeFrameQueue::ReleaseFrameHandle(InputFrameHandle& frameHandle)
 {
 	// 외부에서 받아온 FrameHandle 을 반환 해주기 위한 Callback 호출
 
-	if (!frameHandle.texture)
+	// EnqueueLatest 와 같은 기준이다. 슬롯만 실려 온 프레임도 반납해야
+	// 한다 — 반납을 빼먹으면 그 슬롯이 영구히 묶인다.
+	if (!frameHandle.texture && frameHandle.sourceSlotId < 0)
 		return;
 
 	if (m_releaseCallback)

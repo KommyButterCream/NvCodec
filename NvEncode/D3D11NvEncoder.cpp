@@ -5,6 +5,10 @@
 
 #include "D3D11NvEncoder_Impl.h"
 
+// =============================================================================
+// 생성 / 소멸
+// =============================================================================
+
 D3D11NvEncoder::D3D11NvEncoder()
 	: m_impl(new (std::nothrow) D3D11NvEncoder_Impl())
 {
@@ -25,6 +29,10 @@ D3D11NvEncoder::~D3D11NvEncoder()
 	delete m_impl;
 	m_impl = nullptr;
 }
+
+// =============================================================================
+// 초기화 / 종료
+// =============================================================================
 
 bool D3D11NvEncoder::Initialize(
 	ID3D11Device* device,
@@ -51,6 +59,15 @@ bool D3D11NvEncoder::Initialize(
 	return Initialize(device, config, contextGate);
 }
 
+void D3D11NvEncoder::Destroy()
+{
+	m_impl->Destroy();
+}
+
+// =============================================================================
+// 재설정
+// =============================================================================
+
 NvEncReconfigureResult D3D11NvEncoder::Reconfigure(const NvEncConfig& config, bool forceIdr)
 {
 	return m_impl
@@ -58,75 +75,18 @@ NvEncReconfigureResult D3D11NvEncoder::Reconfigure(const NvEncConfig& config, bo
 		: NvEncReconfigureResult::NotInitialized;
 }
 
-void D3D11NvEncoder::GetConfig(NvEncConfig& config) const
+// =============================================================================
+// 공유 입력 풀 (생산자 디바이스 연결)
+// =============================================================================
+
+bool D3D11NvEncoder::RegisterSharedInputPool(const HANDLE* sharedHandles, uint32_t count)
 {
-	m_impl->GetConfig(config);
+	return m_impl->RegisterSharedInputPool(sharedHandles, count);
 }
 
-void D3D11NvEncoder::Destroy()
-{
-	m_impl->Destroy();
-}
-
-void D3D11NvEncoder::SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData)
-{
-	m_impl->SetEncodedPacketCallback(callback, userData);
-}
-
-void D3D11NvEncoder::SetErrorCallback(ErrorCallback callback, void* userData)
-{
-	m_impl->SetErrorCallback(callback, userData);
-}
-
-bool D3D11NvEncoder::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
-{
-	return m_impl->PrepareFrameForEncode(bgraTexture);
-}
-
-void D3D11NvEncoder::RequestKeyFrame()
-{
-	m_impl->RequestKeyFrame();
-}
-
-bool D3D11NvEncoder::CanSubmitFrame() const
-{
-	return m_impl->CanSubmitFrame();
-}
-
-bool D3D11NvEncoder::SubmitFrame(uint64_t frameId)
-{
-	return m_impl->SubmitFrame(frameId);
-}
-
-uint32_t D3D11NvEncoder::GetPendingFrameCount() const
-{
-	return m_impl->GetPendingFrameCount();
-}
-
-bool D3D11NvEncoder::WaitForPendingFrames(uint32_t timeoutMilliseconds) const
-{
-	return m_impl->WaitForPendingFrames(timeoutMilliseconds);
-}
-
-bool D3D11NvEncoder::IsAsyncPipelineEnabled() const
-{
-	return m_impl->IsAsyncPipelineEnabled();
-}
-
-bool D3D11NvEncoder::DoEncode(NvEncPacket& encodeResultPacket)
-{
-	return m_impl->DoEncode(encodeResultPacket);
-}
-
-bool D3D11NvEncoder::IsFaulted() const
-{
-	return m_impl->IsFaulted();
-}
-
-void D3D11NvEncoder::GetStats(NvEncStats& stats) const
-{
-	m_impl->GetStats(stats);
-}
+// =============================================================================
+// 인코드 스레드 제어
+// =============================================================================
 
 bool D3D11NvEncoder::StartEncodeThread(EncodeFrameQueue* queue)
 {
@@ -138,12 +98,98 @@ void D3D11NvEncoder::StopEncodeThread()
 	m_impl->StopEncodeThread();
 }
 
+// =============================================================================
+// 콜백 등록
+// =============================================================================
+
+void D3D11NvEncoder::SetEncodedPacketCallback(EncodedPacketCallback callback, void* userData)
+{
+	m_impl->SetEncodedPacketCallback(callback, userData);
+}
+
+void D3D11NvEncoder::SetErrorCallback(ErrorCallback callback, void* userData)
+{
+	m_impl->SetErrorCallback(callback, userData);
+}
+
 void D3D11NvEncoder::SetKeyFrameRequestCallback(KeyFrameRequestCallback callback, void* userData)
 {
 	m_impl->SetKeyFrameRequestCallback(callback, userData);
 }
 
+// =============================================================================
+// 프레임 투입
+// =============================================================================
+
+bool D3D11NvEncoder::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
+{
+	return m_impl->PrepareFrameForEncode(bgraTexture);
+}
+
+bool D3D11NvEncoder::PrepareFrameForEncodeFromSharedSlot(uint32_t slot)
+{
+	return m_impl->PrepareFrameForEncodeFromSharedSlot(slot);
+}
+
+void D3D11NvEncoder::RequestKeyFrame()
+{
+	m_impl->RequestKeyFrame();
+}
+
+bool D3D11NvEncoder::SubmitFrame(uint64_t frameId)
+{
+	return m_impl->SubmitFrame(frameId);
+}
+
+bool D3D11NvEncoder::DoEncode(NvEncPacket& encodeResultPacket)
+{
+	return m_impl->DoEncode(encodeResultPacket);
+}
+
+bool D3D11NvEncoder::WaitForPendingFrames(uint32_t timeoutMilliseconds) const
+{
+	return m_impl->WaitForPendingFrames(timeoutMilliseconds);
+}
+
+// =============================================================================
+// 통계 / 진단
+// =============================================================================
+
+void D3D11NvEncoder::GetStats(NvEncStats& stats) const
+{
+	m_impl->GetStats(stats);
+}
+
 void D3D11NvEncoder::DebugFailNextOutputs(uint32_t count)
 {
 	m_impl->DebugFailNextOutputs(count);
+}
+
+// =============================================================================
+// 상태 / 설정 조회
+// =============================================================================
+
+void D3D11NvEncoder::GetConfig(NvEncConfig& config) const
+{
+	m_impl->GetConfig(config);
+}
+
+bool D3D11NvEncoder::CanSubmitFrame() const
+{
+	return m_impl->CanSubmitFrame();
+}
+
+uint32_t D3D11NvEncoder::GetPendingFrameCount() const
+{
+	return m_impl->GetPendingFrameCount();
+}
+
+bool D3D11NvEncoder::IsAsyncPipelineEnabled() const
+{
+	return m_impl->IsAsyncPipelineEnabled();
+}
+
+bool D3D11NvEncoder::IsFaulted() const
+{
+	return m_impl->IsFaulted();
 }

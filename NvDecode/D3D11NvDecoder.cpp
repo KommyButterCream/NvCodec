@@ -5,6 +5,10 @@
 
 #include "D3D11NvDecoder_Impl.h"
 
+// =============================================================================
+// 생성 / 소멸
+// =============================================================================
+
 D3D11NvDecoder::D3D11NvDecoder()
 	: m_impl(new (std::nothrow) D3D11NvDecoder_Impl())
 {
@@ -25,6 +29,10 @@ D3D11NvDecoder::~D3D11NvDecoder()
 	delete m_impl;
 	m_impl = nullptr;
 }
+
+// =============================================================================
+// 초기화 / 종료
+// =============================================================================
 
 bool D3D11NvDecoder::Initialize(
 	ID3D11Device* device,
@@ -50,11 +58,47 @@ void D3D11NvDecoder::Destroy()
 	m_impl->Destroy();
 }
 
+// =============================================================================
+// 디코드 스레드 제어
+// =============================================================================
+
+bool D3D11NvDecoder::StartDecodeThread(DecodeFrameQueue* queue)
+{
+	return m_impl->StartDecodeThread(queue);
+}
+
+void D3D11NvDecoder::StopDecodeThread()
+{
+	m_impl->StopDecodeThread();
+}
+
+// =============================================================================
+// 콜백 등록
+// =============================================================================
+
+void D3D11NvDecoder::SetFrameCallback(FrameCallback callback, void* userData)
+{
+	m_impl->SetFrameCallback(callback, userData);
+}
+
+void D3D11NvDecoder::SetErrorCallback(ErrorCallback callback, void* userData)
+{
+	m_impl->SetErrorCallback(callback, userData);
+}
+
+// =============================================================================
+// 비트스트림 투입
+// =============================================================================
+
 bool D3D11NvDecoder::Parse(const uint8_t* data, uint32_t size, uint64_t timestamp,
 	bool endOfPicture, bool endOfStream, bool discontinuity)
 {
 	return m_impl->Parse(data, size, timestamp, endOfPicture, endOfStream, discontinuity);
 }
+
+// =============================================================================
+// 프레임 수신
+// =============================================================================
 
 D3D11NvDecoder::Frame* D3D11NvDecoder::AcquireFrame()
 {
@@ -69,25 +113,9 @@ void D3D11NvDecoder::ReleaseFrame(Frame* frame)
 	m_impl->ReleaseFrame(frame);
 }
 
-void D3D11NvDecoder::SetErrorCallback(ErrorCallback callback, void* userData)
-{
-	m_impl->SetErrorCallback(callback, userData);
-}
-
-bool D3D11NvDecoder::StartDecodeThread(DecodeFrameQueue* queue)
-{
-	return m_impl->StartDecodeThread(queue);
-}
-
-void D3D11NvDecoder::StopDecodeThread()
-{
-	m_impl->StopDecodeThread();
-}
-
-void D3D11NvDecoder::SetFrameCallback(FrameCallback callback, void* userData)
-{
-	m_impl->SetFrameCallback(callback, userData);
-}
+// =============================================================================
+// 통계 / 상태 조회
+// =============================================================================
 
 void D3D11NvDecoder::GetStats(NvDecStats& stats) const
 {

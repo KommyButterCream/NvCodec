@@ -73,14 +73,14 @@ void EncodeCompletionThread::Run()
 			continue;
 		}
 
-		const NvEncOutputResult result = encoder->ProcessOneOutput(true, true);
-		if (result == NvEncOutputResult::Completed)
+		const NvEncCompletionResult result = encoder->CompleteOldestFrame(true, true);
+		if (result == NvEncCompletionResult::Completed)
 		{
 			consecutiveLostFrames = 0;
 			continue;
 		}
 
-		if (result == NvEncOutputResult::NotReady)
+		if (result == NvEncCompletionResult::NotReady)
 		{
 			// pending > 0 인데 회수할 게 없는 상태. 정상 경로에서는 오지 않지만
 			// 오더라도 바쁜 대기로 코어를 태우지 않도록 양보한다.
@@ -88,7 +88,7 @@ void EncodeCompletionThread::Run()
 			continue;
 		}
 
-		if (result == NvEncOutputResult::FrameLost)
+		if (result == NvEncCompletionResult::FrameLost)
 		{
 			// 슬롯은 회수됐으므로 계속 인코딩할 수 있다.
 			if (++consecutiveLostFrames < kMaxConsecutiveLostFrames)
@@ -100,7 +100,7 @@ void EncodeCompletionThread::Run()
 			break;
 		}
 
-		// Fatal. ProcessOneOutput 안에서 이미 faulted 상태로 진입했다.
+		// Fatal. CompleteOldestFrame 안에서 이미 faulted 상태로 진입했다.
 		break;
 	}
 }

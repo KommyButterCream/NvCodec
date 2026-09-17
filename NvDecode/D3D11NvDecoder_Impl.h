@@ -114,9 +114,9 @@ public:
 
 private:
 	// --- 파서 콜백 (NVDEC) ---
-	static int32_t CUDAAPI HandleVideoSequence(void* userData, CUVIDEOFORMAT* format);
-	static int32_t CUDAAPI HandlePictureDecode(void* userData, CUVIDPICPARAMS* pictureParams);
-	static int32_t CUDAAPI HandlePictureDisplay(void* userData, CUVIDPARSERDISPINFO* displayInfo);
+	static int32_t CUDAAPI VideoSequenceCallback(void* userData, CUVIDEOFORMAT* format);
+	static int32_t CUDAAPI PictureDecodeCallback(void* userData, CUVIDPICPARAMS* pictureParams);
+	static int32_t CUDAAPI PictureDisplayCallback(void* userData, CUVIDPARSERDISPINFO* displayInfo);
 
 	int32_t OnVideoSequence(CUVIDEOFORMAT* format);
 	int32_t OnPictureDecode(CUVIDPICPARAMS* pictureParams);
@@ -134,7 +134,7 @@ private:
 	bool CreateInputQueue(size_t depth, size_t bufferSize);
 	void DestroyInputQueue();
 
-	void WaitForAllSlots();
+	void WaitForAllSlotGpuWork();
 
 	// --- 재설정 ---
 	// 반환값은 OnVideoSequence 가 파서에 그대로 돌려줄 값이다.
@@ -144,8 +144,8 @@ private:
 	// --- 오류 / 콜백 통지 ---
 	void EnterFaultedState(NvDecErrorCode errorCode);
 	void InvokeErrorCallback(NvDecErrorCode errorCode);
-	void NoteLostFrame(NvDecErrorCode errorCode);
-	void NoteHealthyFrame();
+	void RecordLostFrame(NvDecErrorCode errorCode);
+	void ResetLostFrameStreak();
 
 	// --- 조회 ---
 	// FIFO 로 다음에 쓸 슬롯. 앱이 들고 있으면 쓸 수 없다.
@@ -168,8 +168,8 @@ private:
 
 	CUdevice m_cudaDevice = 0;
 	CUcontext m_cudaContext = nullptr;
-	CUvideoctxlock m_ctxLock = nullptr;
-	CUstream m_cuStream = nullptr;
+	CUvideoctxlock m_videoContextLock = nullptr;
+	CUstream m_cudaStream = nullptr;
 
 	CUvideodecoder m_decoder = nullptr;
 	CUvideoparser m_parser = nullptr;
@@ -206,8 +206,8 @@ private:
 	DecodePacketQueue* m_inputQueue = nullptr;
 
 	// StartDecodeThread 이전에 SetFrameCallback 이 불릴 수 있다.
-	D3D11NvDecoder::FrameCallback m_pendingFrameCallback = nullptr;
-	void* m_pendingFrameCallbackUserData = nullptr;
+	D3D11NvDecoder::FrameCallback m_frameCallback = nullptr;
+	void* m_frameCallbackUserData = nullptr;
 
 	ErrorCallback m_errorCallback = nullptr;
 	void* m_errorCallbackUserData = nullptr;

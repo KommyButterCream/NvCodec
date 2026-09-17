@@ -102,11 +102,11 @@ bool DecodePacketQueue::Initialize(size_t packetCount, size_t bufferSize)
 	{
 		m_items[i].data = m_buffers + (m_bufferSize * i);
 		m_items[i].size = 0;
-		m_items[i].frameId = 0;
 		m_items[i].timestamp = 0;
-		m_items[i].frameType = 0;
 		m_states[i] = SLOT_FREE;
 	}
+
+	::InterlockedExchange(&m_running, TRUE);
 	return true;
 }
 
@@ -153,8 +153,8 @@ bool DecodePacketQueue::EnqueuePacket(const InputPacket& packet)
 	::AcquireSRWLockExclusive(&m_lock);
 
 	const bool wasEmpty = (m_queuedCount == 0);
-	const bool hasHeldFrame = (::ReadAcquire(&m_hasHeldFrame) == TRUE);
-	const size_t occupiedCount = m_queuedCount + (hasHeldFrame ? 1 : 0);
+	const bool hasHeldPacket = (::ReadAcquire(&m_hasHeldPacket) == TRUE);
+	const size_t occupiedCount = m_queuedCount + (hasHeldPacket ? 1 : 0);
 
 	// 패킷을 저장하기 위한 비어 있는 슬롯을 찾는다.
 	if (occupiedCount >= m_packetCount)
@@ -171,9 +171,7 @@ bool DecodePacketQueue::EnqueuePacket(const InputPacket& packet)
 		const size_t droppedIndex = m_readPos;
 		m_states[droppedIndex] = SLOT_FREE;
 		m_items[droppedIndex].size = 0;
-		m_items[droppedIndex].frameId = 0;
 		m_items[droppedIndex].timestamp = 0;
-		m_items[droppedIndex].frameType = 0;
 		m_readPos = FindNextSlotWithState(m_states, m_packetCount, WrapRingIndex(droppedIndex + 1, m_packetCount), SLOT_QUEUED);
 
 		--m_queuedCount;
@@ -198,9 +196,7 @@ bool DecodePacketQueue::EnqueuePacket(const InputPacket& packet)
 	// 이때, Encode Raw Data 를 슬롯 버퍼로 Deep-Copy 복사하여 저장한다.
 	DecodePacketItem& item = m_items[m_writePos];
 	item.size = packet.size;
-	item.frameId = packet.frameId;
 	item.timestamp = packet.timestamp;
-	item.frameType = packet.frameType;
 	if (packet.size > 0)
 	{
 		memcpy(item.data, packet.data, packet.size);
@@ -257,7 +253,7 @@ DecodePacketQueue::DecodePacketItem* DecodePacketQueue::AcquireReadPacket()
 
 	// EnqueuePacket 내부에서 WakeConditionVariable 로 Sleep 을 깨운 경우
 	// 현재 처리 중인 패킷이 있다면 종료한다.
-	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
+	if (::ReadAcquire(&m_hasHeldPacket) == TRUE)
 	{
 		::ReleaseSRWLockExclusive(&m_lock);
 		return nullptr;
@@ -270,7 +266,7 @@ DecodePacketQueue::DecodePacketItem* DecodePacketQueue::AcquireReadPacket()
 	// m_heldPos 를 업데이트 하여 ReleaseReadPacket 에서 사용하도록 한다.
 	// 외부에 Buffer Index 를 알리지 않기 위함.
 	m_heldPos = heldIndex;
-	::InterlockedExchange(&m_hasHeldFrame, TRUE);
+	::InterlockedExchange(&m_hasHeldPacket, TRUE);
 	--m_queuedCount;
 
 	// 다음 Read Pos 계산
@@ -307,14 +303,12 @@ void DecodePacketQueue::ReleaseReadPacket()
 
 	// 실제로 패킷을 Acquire 했는지 체크 후
 	// 슬롯 상태를 초기화 해준다.
-	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
+	if (::ReadAcquire(&m_hasHeldPacket) == TRUE)
 	{
 		m_states[m_heldPos] = SLOT_FREE;
 		m_items[m_heldPos].size = 0;
-		m_items[m_heldPos].frameId = 0;
 		m_items[m_heldPos].timestamp = 0;
-		m_items[m_heldPos].frameType = 0;
-		::InterlockedExchange(&m_hasHeldFrame, FALSE);
+		::InterlockedExchange(&m_hasHeldPacket, FALSE);
 		::InterlockedIncrement(&m_dequeuedCount);
 	}
 	::ReleaseSRWLockExclusive(&m_lock);

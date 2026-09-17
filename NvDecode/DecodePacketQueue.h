@@ -28,9 +28,7 @@ public:
 	{
 		uint8_t* data = nullptr;
 		size_t size = 0;
-		uint64_t frameId = 0;
 		uint64_t timestamp = 0;
-		uint16_t frameType = 0;
 	};
 
 	enum SlotState : uint8_t
@@ -67,20 +65,25 @@ public:
 private:
 	size_t m_packetCount = 0;
 	size_t m_bufferSize = 0;
-
-	alignas(8) volatile LONG64 m_dropCount = 0;
 	uint8_t* m_buffers = nullptr;
 	DecodePacketItem* m_items = nullptr;
 	SlotState* m_states = nullptr;
 
+	// =====================================================================
+	// m_lock 이 지키는 큐 인덱스
+	// =====================================================================
 	alignas(64) size_t m_writePos = 0;
-	alignas(64) size_t m_readPos = 0;
-	alignas(64) size_t m_queuedCount = 0;
-	alignas(64) size_t m_heldPos = 0;
-	alignas(4) volatile LONG m_hasHeldFrame = FALSE;
+	size_t m_readPos = 0;
+	size_t m_queuedCount = 0;
+	size_t m_heldPos = 0;
+	volatile LONG m_hasHeldPacket = FALSE;
 
-	alignas(4) volatile LONG m_running = TRUE;
-	alignas(4) volatile LONG m_dequeuedCount = 0;
+	// =====================================================================
+	// 락 없이 읽히는 상태 / 카운터
+	// =====================================================================
+	alignas(64) volatile LONG m_running = FALSE;
+	volatile LONG64 m_dropCount = 0;
+	volatile LONG m_dequeuedCount = 0;
 
 	SRWLOCK m_lock = SRWLOCK_INIT;
 	CONDITION_VARIABLE m_cv = CONDITION_VARIABLE_INIT;

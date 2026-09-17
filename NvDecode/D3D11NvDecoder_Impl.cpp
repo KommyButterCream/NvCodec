@@ -295,13 +295,13 @@ bool D3D11NvDecoder_Impl::CreateCudaContext()
 	do
 	{
 		// NVDEC 내부 동기화 Lock 생성
-		if (!NVDEC_API_CALL(cuvidCtxLockCreate(&m_ctxLock, m_cudaContext)))
+		if (!NVDEC_API_CALL(cuvidCtxLockCreate(&m_videoContextLock, m_cudaContext)))
 		{
 			break;
 		}
 
 		// 비동기 처리를 위한 Cuda Stream 생성
-		if (!CUDA_DRVAPI_CALL(cuStreamCreate(&m_cuStream, CU_STREAM_NON_BLOCKING)))
+		if (!CUDA_DRVAPI_CALL(cuStreamCreate(&m_cudaStream, CU_STREAM_NON_BLOCKING)))
 		{
 			break;
 		}
@@ -323,7 +323,7 @@ bool D3D11NvDecoder_Impl::CreateCudaContext()
 
 		// NVDEC Parser 생성
 		// cuvidParseVideoData 를 호출하면 내부 Callback 구조로
-		// HandleVideoSequence -> HandlePictureDecode -> HandlePictureDisplay 가 호출된다.
+		// VideoSequenceCallback -> PictureDecodeCallback -> PictureDisplayCallback 가 호출된다.
 		// 이 코드에서는 H.264 코덱 기준으로 디코더를 생성.
 		//
 		// ulMaxDisplayDelay 0 은 저지연용이다. 파서가 표시 순서를 맞추려고
@@ -334,9 +334,9 @@ bool D3D11NvDecoder_Impl::CreateCudaContext()
 		parserParameters.ulMaxNumDecodeSurfaces = m_config.maxDecodeSurfaces;
 		parserParameters.ulMaxDisplayDelay = 0;
 		parserParameters.pUserData = this;
-		parserParameters.pfnSequenceCallback = HandleVideoSequence;
-		parserParameters.pfnDecodePicture = HandlePictureDecode;
-		parserParameters.pfnDisplayPicture = HandlePictureDisplay;
+		parserParameters.pfnSequenceCallback = VideoSequenceCallback;
+		parserParameters.pfnDecodePicture = PictureDecodeCallback;
+		parserParameters.pfnDisplayPicture = PictureDisplayCallback;
 
 		if (!NVDEC_API_CALL(cuvidCreateVideoParser(&m_parser, &parserParameters)))
 		{
@@ -536,11 +536,11 @@ void D3D11NvDecoder_Impl::DestroyBGRAStagingBuffers()
 	m_bgraStagingPitch = 0;
 }
 
-void D3D11NvDecoder_Impl::WaitForAllSlots()
+void D3D11NvDecoder_Impl::WaitForAllSlotGpuWork()
 {
 	// cuEvent 로 모든 프레임이 Idle 상태인지 체크
 	// Decode 중 이라면 cuEventSynchronize 로 대기
-	// HandlePictureDisplay 호출 종료 시점에 Event Set.
+	// PictureDisplayCallback 호출 종료 시점에 Event Set.
 
 	ScopedCudaContext cudaContext(m_cudaContext);
 	if (!cudaContext.IsActive())
@@ -594,7 +594,7 @@ void D3D11NvDecoder_Impl::Destroy()
 		if (cudaContext.IsActive())
 		{
 			// Decode 수행 중인 프레임이 있다면 전부 기다린 후에 해제한다.
-			WaitForAllSlots();
+			WaitForAllSlotGpuWork();
 			DestroyOutputSlots();
 			DestroyBGRAStagingBuffers();
 
@@ -613,17 +613,17 @@ void D3D11NvDecoder_Impl::Destroy()
 				}
 			}
 
-			if (m_cuStream)
+			if (m_cudaStream)
 			{
-				CUDA_DRVAPI_CALL(cuStreamDestroy(m_cuStream));
-				m_cuStream = nullptr;
+				CUDA_DRVAPI_CALL(cuStreamDestroy(m_cudaStream));
+				m_cudaStream = nullptr;
 			}
 		}
 
-		if (m_ctxLock)
+		if (m_videoContextLock)
 		{
-			NVDEC_API_CALL(cuvidCtxLockDestroy(m_ctxLock));
-			m_ctxLock = nullptr;
+			NVDEC_API_CALL(cuvidCtxLockDestroy(m_videoContextLock));
+			m_videoContextLock = nullptr;
 		}
 	}
 
@@ -725,7 +725,7 @@ int32_t D3D11NvDecoder_Impl::ReconfigureDecoder(CUVIDEOFORMAT* videoFormat)
 
 	// 여기까지 온 경우라면 디코더 해상도가 변경된 경우
 	// 리소스를 해제할 예정이므로  현재 디코딩 중 인 모든 프레임의 디코딩이 종료될 때 까지 대기
-	WaitForAllSlots();
+	WaitForAllSlotGpuWork();
 
 	ScopedCudaContext cudaContext(m_cudaContext);
 	if (!cudaContext.IsActive())
@@ -807,7 +807,7 @@ bool D3D11NvDecoder_Impl::StartDecodeThread()
 		return false;
 	}
 
-	m_decodeThread->SetFrameCallback(m_pendingFrameCallback, m_pendingFrameCallbackUserData);
+	m_decodeThread->SetFrameCallback(m_frameCallback, m_frameCallbackUserData);
 
 	if (!m_decodeThread->Initialize(m_inputQueue, this))
 	{
@@ -875,8 +875,8 @@ bool D3D11NvDecoder_Impl::EnqueuePacket(const NvDecPacket& packet)
 void D3D11NvDecoder_Impl::SetFrameCallback(D3D11NvDecoder::FrameCallback callback, void* userData)
 {
 	// 스레드가 아직 없으면 기억해 뒀다가 StartDecodeThread 에서 넘긴다.
-	m_pendingFrameCallback = callback;
-	m_pendingFrameCallbackUserData = userData;
+	m_frameCallback = callback;
+	m_frameCallbackUserData = userData;
 
 	if (m_decodeThread)
 	{
@@ -900,7 +900,7 @@ bool D3D11NvDecoder_Impl::Parse(const uint8_t* data, uint32_t size, uint64_t tim
 	bool endOfPicture, bool endOfStream, bool discontinuity)
 {
 	// Decode Thread 가 호출하는 Decode Request 함수.
-	// 이후 HandleVideoSequence -> HandlePictureDecode -> HandlePictureDisplay
+	// 이후 VideoSequenceCallback -> PictureDecodeCallback -> PictureDisplayCallback
 	// 순서로 콜백이 호출된다.
 	if (!m_parser || (!data && size > 0))
 	{
@@ -928,7 +928,7 @@ bool D3D11NvDecoder_Impl::Parse(const uint8_t* data, uint32_t size, uint64_t tim
 	if (!NVDEC_API_CALL(cuvidParseVideoData(m_parser, &packet)))
 	{
 		// 비트스트림이 깨졌을 수 있다. 파이프라인은 유지하고 앱에 알린다.
-		NoteLostFrame(NvDecErrorCode::ParseFailed);
+		RecordLostFrame(NvDecErrorCode::ParseFailed);
 		return false;
 	}
 
@@ -940,17 +940,17 @@ bool D3D11NvDecoder_Impl::Parse(const uint8_t* data, uint32_t size, uint64_t tim
 // 파서 콜백 (NVDEC)
 // =============================================================================
 
-int32_t CUDAAPI D3D11NvDecoder_Impl::HandleVideoSequence(void* userData, CUVIDEOFORMAT* format)
+int32_t CUDAAPI D3D11NvDecoder_Impl::VideoSequenceCallback(void* userData, CUVIDEOFORMAT* format)
 {
 	return reinterpret_cast<D3D11NvDecoder_Impl*>(userData)->OnVideoSequence(format);
 }
 
-int32_t CUDAAPI D3D11NvDecoder_Impl::HandlePictureDecode(void* userData, CUVIDPICPARAMS* pictureParams)
+int32_t CUDAAPI D3D11NvDecoder_Impl::PictureDecodeCallback(void* userData, CUVIDPICPARAMS* pictureParams)
 {
 	return reinterpret_cast<D3D11NvDecoder_Impl*>(userData)->OnPictureDecode(pictureParams);
 }
 
-int32_t CUDAAPI D3D11NvDecoder_Impl::HandlePictureDisplay(void* userData, CUVIDPARSERDISPINFO* displayInfo)
+int32_t CUDAAPI D3D11NvDecoder_Impl::PictureDisplayCallback(void* userData, CUVIDPARSERDISPINFO* displayInfo)
 {
 	return reinterpret_cast<D3D11NvDecoder_Impl*>(userData)->OnPictureDisplay(displayInfo);
 }
@@ -1066,7 +1066,7 @@ int32_t D3D11NvDecoder_Impl::OnVideoSequence(CUVIDEOFORMAT* videoFormat)
 	decodeCreateInfo.ulNumOutputSurfaces = 2;
 	decodeCreateInfo.ulTargetWidth = videoFormatDesc.codedWidth;
 	decodeCreateInfo.ulTargetHeight = videoFormatDesc.lumaHeight;
-	decodeCreateInfo.vidLock = m_ctxLock;
+	decodeCreateInfo.vidLock = m_videoContextLock;
 	decodeCreateInfo.ulCreationFlags = cudaVideoCreate_PreferCUVID;
 
 	// NVDEC Decoder 생성
@@ -1139,7 +1139,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	vidProcParameters.progressive_frame = displayInfo->progressive_frame;
 	vidProcParameters.top_field_first = displayInfo->top_field_first;
 	vidProcParameters.second_field = displayInfo->repeat_first_field;
-	vidProcParameters.output_stream = m_cuStream;
+	vidProcParameters.output_stream = m_cudaStream;
 
 	CUdeviceptr srcFrame = 0;   // Decode 결과 NVDEC 내부 프레임 포인터가 저장 되어 있다
 	unsigned int srcPitch = 0;
@@ -1156,7 +1156,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	// 이 함수가 이미 쓰는 mapped* 플래그와 같은 방식으로 게이트도 직접 여닫는다.
 	bool gateEntered = false;
 
-	if (!NVDEC_API_CALL(cuvidCtxLock(m_ctxLock, 0)))
+	if (!NVDEC_API_CALL(cuvidCtxLock(m_videoContextLock, 0)))
 	{
 		return -1;
 	}
@@ -1164,7 +1164,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	// Decoding 된 프레임 가져오기
 	if (!NVDEC_API_CALL(cuvidMapVideoFrame(m_decoder, displayInfo->picture_index, &srcFrame, &srcPitch, &vidProcParameters)))
 	{
-		NVDEC_API_CALL(cuvidCtxUnlock(m_ctxLock, 0));
+		NVDEC_API_CALL(cuvidCtxUnlock(m_videoContextLock, 0));
 		return -1;
 	}
 	mappedVideoFrame = true;
@@ -1189,8 +1189,8 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	{
 		::InterlockedIncrement64(&m_droppedPoolExhaustedCount);
 		NVDEC_API_CALL(cuvidUnmapVideoFrame(m_decoder, srcFrame));
-		NVDEC_API_CALL(cuvidCtxUnlock(m_ctxLock, 0));
-		NoteLostFrame(NvDecErrorCode::OutputPoolExhausted);
+		NVDEC_API_CALL(cuvidCtxUnlock(m_videoContextLock, 0));
+		RecordLostFrame(NvDecErrorCode::OutputPoolExhausted);
 		return 1;
 	}
 
@@ -1199,7 +1199,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	gateEntered = (m_contextGate != nullptr) && m_contextGate->Enter();
 
 	// 사전에 등록된 D3D11Texture2D 에 Map
-	if (!CUDA_DRVAPI_CALL(cuGraphicsMapResources(1, &m_cudaResources[slot], m_cuStream)))
+	if (!CUDA_DRVAPI_CALL(cuGraphicsMapResources(1, &m_cudaResources[slot], m_cudaStream)))
 	{
 		result = -1;
 		goto cleanup;
@@ -1220,7 +1220,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 			srcPitch,
 			reinterpret_cast<uchar4*>(m_bgraStagingBuffers[slot]),
 			static_cast<int32_t>(m_bgraStagingPitch),
-			m_cuStream);
+			m_cudaStream);
 	}
 
 	// NV12 -> BGRA8 변환이 끝난 후 D3D11 Texture 로 데이터 복사
@@ -1239,14 +1239,14 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	copy.WidthInBytes = m_videoFormatDesc.lumaWidth * 4;
 	copy.Height = m_videoFormatDesc.lumaHeight;
 
-	if (!CUDA_DRVAPI_CALL(cuMemcpy2DAsync(&copy, m_cuStream)))
+	if (!CUDA_DRVAPI_CALL(cuMemcpy2DAsync(&copy, m_cudaStream)))
 	{
 		result = -1;
 		goto cleanup;
 	}
 
 	// 해당 인덱스에 Decode 가 완료 이벤트 설정
-	if (!CUDA_DRVAPI_CALL(cuEventRecord(m_decodeCompleteEvents[slot], m_cuStream)))
+	if (!CUDA_DRVAPI_CALL(cuEventRecord(m_decodeCompleteEvents[slot], m_cudaStream)))
 	{
 		result = -1;
 		goto cleanup;
@@ -1266,13 +1266,13 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	m_frames[slot].timestamp = displayInfo->timestamp;
 	::InterlockedIncrement(&m_inputSequence);
 	::InterlockedIncrement64(&m_decodedFrameCount);
-	NoteHealthyFrame();
+	ResetLostFrameStreak();
 
 	// 사용이 끝난 Resource Unmap 처리
 cleanup:
 	if (mappedGraphicsResource)
 	{
-		CUDA_DRVAPI_CALL(cuGraphicsUnmapResources(1, &m_cudaResources[slot], m_cuStream));
+		CUDA_DRVAPI_CALL(cuGraphicsUnmapResources(1, &m_cudaResources[slot], m_cudaStream));
 	}
 
 	if (mappedVideoFrame)
@@ -1280,7 +1280,7 @@ cleanup:
 		NVDEC_API_CALL(cuvidUnmapVideoFrame(m_decoder, srcFrame));
 	}
 
-	NVDEC_API_CALL(cuvidCtxUnlock(m_ctxLock, 0));
+	NVDEC_API_CALL(cuvidCtxUnlock(m_videoContextLock, 0));
 
 	if (gateEntered)
 	{
@@ -1412,7 +1412,7 @@ void D3D11NvDecoder_Impl::InvokeErrorCallback(NvDecErrorCode errorCode)
 	::ReleaseSRWLockShared(&m_callbackLock);
 }
 
-void D3D11NvDecoder_Impl::NoteLostFrame(NvDecErrorCode errorCode)
+void D3D11NvDecoder_Impl::RecordLostFrame(NvDecErrorCode errorCode)
 {
 	// 프레임 하나를 잃었다. 연속으로 쌓이면 세션이 살아있다고 볼 수 없다.
 	InvokeErrorCallback(errorCode);
@@ -1426,7 +1426,7 @@ void D3D11NvDecoder_Impl::NoteLostFrame(NvDecErrorCode errorCode)
 	}
 }
 
-void D3D11NvDecoder_Impl::NoteHealthyFrame()
+void D3D11NvDecoder_Impl::ResetLostFrameStreak()
 {
 	::InterlockedExchange(&m_consecutiveLostFrames, 0);
 }

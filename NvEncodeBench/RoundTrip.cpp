@@ -337,14 +337,12 @@ namespace Bench
 			NvDecPacket handle = {};
 			handle.data = frame.data;
 			handle.size = frame.size;
-			handle.frameId = frame.frameId;
 
 			// 디코더 timestamp 에는 앱이 준 frameId 를 싣는다.
 			// NVDEC 를 그대로 통과해 Frame::timestamp 로 돌아오므로, 디코딩된
 			// 프레임이 어느 원본 프레임인지 알 수 있는 유일한 끈이다.
 			// frame.timestamp 는 엔코더 내부 카운터라 앱 프레임 번호와 무관하다.
 			handle.timestamp = frame.frameId;
-			handle.frameType = frame.frameType;
 
 			// EnqueuePacket 은 데이터를 자기 버퍼로 복사한다.
 			// 그래서 packet.data 가 콜백 반환 뒤에 재사용돼도 안전하다.

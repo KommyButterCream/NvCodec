@@ -28,11 +28,12 @@ enum class NvEncPacketStatus : uint8_t
 	Ready,
 };
 
-// ProcessOneOutput 의 결과.
+// CompleteOldestFrame 의 결과.
+// Completed : 비트스트림까지 회수하고 슬롯을 반납했다.
 // NotReady  : 아직 완료되지 않음. 슬롯을 그대로 유지한다.
 // FrameLost : 프레임 1장을 버렸지만 슬롯은 회수했다. 파이프라인은 계속 돈다.
 // Fatal     : 슬롯을 안전하게 회수할 수 없다. 이미 faulted 상태로 진입해 있다.
-enum class NvEncOutputResult : uint8_t
+enum class NvEncCompletionResult : uint8_t
 {
 	Completed = 0,
 	NotReady,
@@ -204,7 +205,9 @@ private:
 	bool ReadEncodedBitstream(uint32_t slot, NvEncPacket& packet);
 	bool Flush();
 
-	NvEncOutputResult ProcessOneOutput(bool block, bool invokeCallback, NvEncPacket* outPacket = nullptr);
+	// 가장 오래된 제출 프레임 하나를 끝낸다 — 완료 대기, 비트스트림 회수,
+	// 입력 리소스 unmap, 슬롯 반납까지. 완료 스레드와 동기 경로가 함께 쓴다.
+	NvEncCompletionResult CompleteOldestFrame(bool block, bool invokeCallback, NvEncPacket* outPacket = nullptr);
 	void ClearPendingFrame(uint32_t slot);
 	void AbortPendingFrames();
 	void SignalAllSlotsFree();

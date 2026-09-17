@@ -45,9 +45,10 @@ struct NvDecPacket
 {
 	const uint8_t* data = nullptr;
 	size_t size = 0;
-	uint64_t frameId = 0;
+
+	// NVDEC 를 그대로 통과해 Frame::timestamp 로 돌아온다.
+	// 앱이 디코딩 결과를 원본 프레임과 짝짓는 유일한 수단이다.
 	uint64_t timestamp = 0;
-	uint16_t frameType = 0;
 };
 
 // 디코더 설정.

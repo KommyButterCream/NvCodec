@@ -1625,8 +1625,8 @@ bool D3D11NvEncoder_Impl::EncodeSync(NvEncPacket& encodeResultPacket)
 	if (!SubmitFrame(0))
 		return false;
 
-	// 슬롯 회수와 실패 복구는 ProcessOneOutput 에 한 곳으로 모아둔다.
-	return ProcessOneOutput(true, false, &encodeResultPacket) == NvEncOutputResult::Completed;
+	// 슬롯 회수와 실패 복구는 CompleteOldestFrame 에 한 곳으로 모아둔다.
+	return CompleteOldestFrame(true, false, &encodeResultPacket) == NvEncCompletionResult::Completed;
 }
 
 bool D3D11NvEncoder_Impl::WaitForPendingFrames(uint32_t timeoutMilliseconds) const
@@ -1894,8 +1894,8 @@ bool D3D11NvEncoder_Impl::Flush()
 		while (GetPendingFrameCount() > 0)
 		{
 			// FrameLost 도 슬롯을 회수하므로 루프는 계속 진행된다.
-			const NvEncOutputResult result = ProcessOneOutput(true, false);
-			if (result == NvEncOutputResult::Fatal || result == NvEncOutputResult::NotReady)
+			const NvEncCompletionResult result = CompleteOldestFrame(true, false);
+			if (result == NvEncCompletionResult::Fatal || result == NvEncCompletionResult::NotReady)
 				return false;
 		}
 	}
@@ -1916,10 +1916,10 @@ bool D3D11NvEncoder_Impl::Flush()
 	return true;
 }
 
-NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeCallback, NvEncPacket* outPacket)
+NvEncCompletionResult D3D11NvEncoder_Impl::CompleteOldestFrame(bool block, bool invokeCallback, NvEncPacket* outPacket)
 {
 	if (!m_encoderHandle || !m_pendingFrames || GetPendingFrameCount() == 0)
-		return NvEncOutputResult::NotReady;
+		return NvEncCompletionResult::NotReady;
 
 	const uint32_t outputSlot = GetOutputSlotIndex();
 	NvEncPendingFrame& pendingFrame = m_pendingFrames[outputSlot];
@@ -1932,21 +1932,21 @@ NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeC
 		printf_s("[NVENC ERROR] Pending frame ring is inconsistent. slot=%u pending=%u\n",
 			outputSlot, GetPendingFrameCount());
 		EnterFaultedState(NvEncErrorCode::SlotRingCorrupted);
-		return NvEncOutputResult::Fatal;
+		return NvEncCompletionResult::Fatal;
 	}
 
 	const NvEncPacketStatus completionStatus = WaitForEncodeCompletion(outputSlot, block);
 
 	// 논블로킹 폴링에서 아직 안 끝난 경우. 슬롯을 그대로 유지한다.
 	if (completionStatus == NvEncPacketStatus::NotReady)
-		return NvEncOutputResult::NotReady;
+		return NvEncCompletionResult::NotReady;
 
 	// completion event 를 못 받았으면 NVENC 가 아직 이 슬롯의 입력 리소스를
 	// 잡고 있을 수 있다. Unmap 도 슬롯 재사용도 안전하지 않으므로 복구하지 않는다.
 	if (completionStatus != NvEncPacketStatus::Ready)
 	{
 		EnterFaultedState(NvEncErrorCode::OutputTimeout);
-		return NvEncOutputResult::Fatal;
+		return NvEncCompletionResult::Fatal;
 	}
 
 	// 여기부터는 하드웨어 인코딩이 끝난 상태다.
@@ -1960,7 +1960,7 @@ NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeC
 	{
 		printf_s("[NVENC ERROR] Failed to unmap input resource. slot=%u\n", outputSlot);
 		EnterFaultedState(NvEncErrorCode::OutputUnmapFailed);
-		return NvEncOutputResult::Fatal;
+		return NvEncCompletionResult::Fatal;
 	}
 
 	// frameId 는 슬롯을 반납하기 전에 읽어야 한다. ClearPendingFrame 이 0 으로 지운다.
@@ -1987,7 +1987,7 @@ NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeC
 		::InterlockedIncrement64(&m_lostFrameCount);
 		printf_s("[NVENC WARNING] Encoded packet dropped. slot=%u\n", outputSlot);
 		InvokeErrorCallback(NvEncErrorCode::OutputReadFailed);
-		return NvEncOutputResult::FrameLost;
+		return NvEncCompletionResult::FrameLost;
 	}
 
 	::InterlockedIncrement64(&m_completedFrameCount);
@@ -1995,7 +1995,7 @@ NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeC
 	if (invokeCallback)
 		InvokeEncodedPacketCallback(packet);
 
-	return NvEncOutputResult::Completed;
+	return NvEncCompletionResult::Completed;
 }
 
 void D3D11NvEncoder_Impl::ClearPendingFrame(uint32_t slot)

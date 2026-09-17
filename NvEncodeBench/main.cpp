@@ -29,7 +29,7 @@ namespace
 			"  --queue N            queue slots, power of two >= 2     (default 4)\n"
 			"  --pool N             source texture pool size          (default 8)\n"
 			"  --keyframe N         request a keyframe every N frames (default 0 = off)\n"
-			"  --sync               use DoEncode on this thread instead of the queue pump\n"
+			"  --sync               use EncodeSync on this thread instead of the queue pump\n"
 			"  --callback-delay N   burn N microseconds of CPU inside the encoded-frame\n"
 			"                       callback, simulating the broadcast work   (default 0)\n"
 			"  --bitrate N          target bitrate in bps            (default 5000000)\n"
@@ -138,7 +138,7 @@ int main(int argc, char** argv)
 				}
 				else if (::_stricmp(arg, "--buffers") == 0)
 				{
-					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.encodeBufferCount)) return 2;
+					if (!TakeUInt32Argument(argc, argv, i, arg, roundTripConfig.encodeSlotCount)) return 2;
 				}
 				else if (::_stricmp(arg, "--dec-slots") == 0)
 				{
@@ -236,7 +236,7 @@ int main(int argc, char** argv)
 		}
 		else if (::_stricmp(arg, "--buffers") == 0)
 		{
-			if (!TakeUInt32Argument(argc, argv, argIndex, arg, config.encodeBufferCount)) return 2;
+			if (!TakeUInt32Argument(argc, argv, argIndex, arg, config.encodeSlotCount)) return 2;
 		}
 		else if (::_stricmp(arg, "--queue") == 0)
 		{
@@ -322,7 +322,7 @@ int main(int argc, char** argv)
 
 	printf_s("NvEncodeBench  %ux%u  frames=%u  fps=%u  buffers=%u  queue=%u  pool=%u  %s\n",
 		config.width, config.height, config.frameCount, config.targetFps,
-		config.encodeBufferCount, config.queueFrameCount, config.sourcePoolCount,
+		config.encodeSlotCount, config.queueFrameCount, config.sourcePoolCount,
 		config.asyncPipeline ? "async" : "sync");
 
 	Bench::EncodeBench bench;

@@ -43,7 +43,7 @@ enum class NvEncErrorCode : uint32_t
 	OutputReadFailed,   // 인코딩은 끝났지만 비트스트림 회수 실패 (프레임 유실, 복구됨)
 	OutputTimeout,      // completion event 미신호. NVENC 가 슬롯을 잡고 있어 복구 불가
 	OutputUnmapFailed,  // Input Resource Unmap 실패. 매핑이 누적되므로 복구 불가
-	RingCorrupted,      // pending 프레임 링 상태 불일치
+	SlotRingCorrupted,  // pending 프레임 링 상태 불일치
 	EncoderFaulted,     // 유실이 연속 누적되어 세션을 포기
 };
 

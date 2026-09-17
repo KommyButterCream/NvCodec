@@ -15,7 +15,7 @@ struct ID3D11Texture2D;
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 class ID3D11ImmediateContextGate;
-class DecodeFrameQueue;
+class DecodePacketQueue;
 class DecodeThread;
 
 class D3D11NvDecoder_Impl
@@ -31,7 +31,7 @@ public:
 		cudaVideoDeinterlaceMode eInterlaceMode = cudaVideoDeinterlaceMode::cudaVideoDeinterlaceMode_Weave;
 
 		uint8_t bitDepthMinus8 = 0;
-		uint32_t bitPerPixel = 0;
+		uint32_t bitsPerPixel = 0;
 
 		uint32_t codedWidth = 0;
 		uint32_t codedHeight = 0;
@@ -86,7 +86,7 @@ public:
 	void StopDecodeThread();
 
 	// 유입. 디코드 스레드가 꺼내 간다.
-	bool EnqueueFrame(const NvDecInputFrame& frame);
+	bool EnqueuePacket(const NvDecPacket& packet);
 
 	// =====================================================================
 	// 콜백 등록
@@ -123,15 +123,15 @@ private:
 	int32_t OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo);
 
 	// --- 초기화 / 리소스 생성 ---
-	bool InitializeCuda();
+	bool CreateCudaContext();
 
 	bool CreateOutputSlots();
 	void DestroyOutputSlots();
 
-	bool CreateBgraStagingBuffers();
-	void DestroyBgraStagingBuffers();
+	bool CreateBGRAStagingBuffers();
+	void DestroyBGRAStagingBuffers();
 
-	bool InitializeInputQueue(size_t depth, size_t bufferSize);
+	bool CreateInputQueue(size_t depth, size_t bufferSize);
 	void DestroyInputQueue();
 
 	void WaitForAllSlots();
@@ -149,8 +149,8 @@ private:
 
 	// --- 조회 ---
 	// FIFO 로 다음에 쓸 슬롯. 앱이 들고 있으면 쓸 수 없다.
-	uint32_t GetWriteSlotIndex() const;
-	uint32_t GetReadSlotIndex() const;
+	uint32_t GetInputSlotIndex() const;
+	uint32_t GetOutputSlotIndex() const;
 	bool IsSlotHeldByApp(uint32_t slot) const;
 
 private:
@@ -203,7 +203,7 @@ private:
 	DecodeThread* m_decodeThread = nullptr;
 
 	// 유입 큐. 소비자가 이 디코더 하나뿐이라 디코더가 소유한다.
-	DecodeFrameQueue* m_inputQueue = nullptr;
+	DecodePacketQueue* m_inputQueue = nullptr;
 
 	// StartDecodeThread 이전에 SetFrameCallback 이 불릴 수 있다.
 	D3D11NvDecoder::FrameCallback m_pendingFrameCallback = nullptr;
@@ -217,7 +217,7 @@ private:
 	// 생산 측 — 파싱 / 표시 경로가 쓴다
 	// 래핑하지 않는 단조증가 카운터. 슬롯은 & (count - 1) 로 얻는다.
 	// =====================================================================
-	alignas(64) volatile LONG m_writeSequence = 0;
+	alignas(64) volatile LONG m_inputSequence = 0;
 	volatile LONG64 m_parsedPacketCount = 0;
 	volatile LONG64 m_decodedFrameCount = 0;
 	volatile LONG64 m_droppedPoolExhaustedCount = 0;
@@ -225,7 +225,7 @@ private:
 	// =====================================================================
 	// 소비 측 — AcquireFrame / ReleaseFrame 이 쓴다
 	// =====================================================================
-	alignas(64) volatile LONG m_readSequence = 0;
+	alignas(64) volatile LONG m_outputSequence = 0;
 	volatile LONG m_framesHeldByApp = 0;
 	volatile LONG64 m_deliveredFrameCount = 0;
 

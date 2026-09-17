@@ -26,12 +26,12 @@ bool EncodeThread::Initialize(EncodeFrameQueue* queue, D3D11NvEncoder_Impl* enco
 	// 그 스레드는 async 파이프라인일 때만 생성된다.
 	//
 	// 동기 모드 엔코더를 붙이면 아무도 출력을 회수하지 않아
-	// pending 이 encodeBufferCount 까지 차오른 뒤 CanSubmitFrame() 이
+	// pending 이 encodeSlotCount 까지 차오른 뒤 CanSubmitFrame() 이
 	// 영구히 false 가 되고, 파이프라인이 조용히 정지한다.
 	// (동기 모드에서는 m_allSlotsFreeEvent 도 생성되지 않아
 	//  WaitForPendingFrames() 가 항상 false 를 반환한다.)
 	//
-	// 동기 인코딩은 호출자가 PrepareFrameForEncode + DoEncode 를
+	// 동기 인코딩은 호출자가 StageFrame + EncodeSync 를
 	// 직접 돌려야 한다. 이 스레드를 쓰지 않는다.
 	//
 	// 주의: 엔코더가 Initialize 된 뒤에 호출해야 한다.
@@ -40,18 +40,18 @@ bool EncodeThread::Initialize(EncodeFrameQueue* queue, D3D11NvEncoder_Impl* enco
 	{
 		printf_s("[NVENC ERROR] StartEncodeThread requires an encoder with the async pipeline"
 			" enabled. A sync-mode encoder would stall because nothing drains its output."
-			" Use PrepareFrameForEncode + DoEncode on the calling thread instead.\n");
+			" Use StageFrame + EncodeSync on the calling thread instead.\n");
 		return false;
 	}
 
 	Shutdown();
 
-	m_encodeFrameQueue = queue;
+	m_inputQueue = queue;
 	m_encoder = encoder;
 
 	if (!Start())
 	{
-		m_encodeFrameQueue = nullptr;
+		m_inputQueue = nullptr;
 		m_encoder = nullptr;
 		return false;
 	}
@@ -62,9 +62,9 @@ bool EncodeThread::Initialize(EncodeFrameQueue* queue, D3D11NvEncoder_Impl* enco
 void EncodeThread::Shutdown()
 {
 	// 엔코딩 프레임 큐 부터 종료 알림
-	if (m_encodeFrameQueue)
+	if (m_inputQueue)
 	{
-		m_encodeFrameQueue->Shutdown();
+		m_inputQueue->Shutdown();
 	}
 
 	// 스레드 종료
@@ -85,7 +85,7 @@ void EncodeThread::Shutdown()
 		}
 	}
 
-	m_encodeFrameQueue = nullptr;
+	m_inputQueue = nullptr;
 	m_encoder = nullptr;
 }
 
@@ -123,12 +123,12 @@ void EncodeThread::Run()
 {
 	while (!IsStopRequested())
 	{
-		EncodeFrameQueue::EncodeFrameItem* frameItem = m_encodeFrameQueue->AcquireReadFrame();
+		EncodeFrameQueue::EncodeFrameItem* frameItem = m_inputQueue->AcquireReadFrame();
 		if (!frameItem)
 		{
 			// 큐가 닫혔으면 정상 종료다.
 			// 그렇지 않다면 HELD 프레임이 남아있다는 뜻이고, 이는 프로그래밍 오류다.
-			if (m_encodeFrameQueue->IsRunning())
+			if (m_inputQueue->IsRunning())
 			{
 				printf_s("[NVENC ERROR] Encode thread stopping: the queue still holds a frame."
 					" ReleaseReadFrame was not called.\n");
@@ -136,7 +136,7 @@ void EncodeThread::Run()
 			break;
 		}
 
-		const uint64_t frameId = frameItem->frameHandle.frameId;
+		const uint64_t frameId = frameItem->inputFrame.frameId;
 		bool forceKeyFrame = frameItem->forceKeyFrame;
 		if (QueryKeyFrameRequest())
 		{
@@ -155,7 +155,7 @@ void EncodeThread::Run()
 			// 인코더 슬롯이 없어 이 프레임을 버린다.
 			// 큐의 dropCount 에는 잡히지 않으므로 여기서 센다.
 			::InterlockedIncrement64(&m_droppedNoEncoderSlotCount);
-			m_encodeFrameQueue->ReleaseReadFrame();
+			m_inputQueue->ReleaseReadFrame();
 			continue;
 		}
 
@@ -169,17 +169,17 @@ void EncodeThread::Run()
 		// 후자가 캡처와 인코더가 서로 다른 D3D11 디바이스를 쓰는 구성이다.
 		// 그때 texture 포인터는 남의 디바이스 것이라 여기서 쓸 수 없고,
 		// 실제로 앱이 nullptr 로 채워 보낸다.
-		if (frameItem->frameHandle.texture)
+		if (frameItem->inputFrame.texture)
 		{
-			prepareSucceeded = m_encoder->PrepareFrameForEncode(frameItem->frameHandle.texture);
+			prepareSucceeded = m_encoder->StageFrame(frameItem->inputFrame.texture);
 		}
-		else if (frameItem->frameHandle.sourceSlotId >= 0)
+		else if (frameItem->inputFrame.sourceSlotId >= 0)
 		{
-			prepareSucceeded = m_encoder->PrepareFrameForEncodeFromSharedSlot(
-				static_cast<uint32_t>(frameItem->frameHandle.sourceSlotId));
+			prepareSucceeded = m_encoder->StageFrameFromSharedSlot(
+				static_cast<uint32_t>(frameItem->inputFrame.sourceSlotId));
 		}
 
-		m_encodeFrameQueue->ReleaseReadFrame();
+		m_inputQueue->ReleaseReadFrame();
 
 		if (!prepareSucceeded)
 		{

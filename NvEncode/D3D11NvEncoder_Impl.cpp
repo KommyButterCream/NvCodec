@@ -131,14 +131,14 @@ bool D3D11NvEncoder_Impl::Initialize(
 	const NvEncConfig& config,
 	ID3D11ImmediateContextGate* contextGate)
 {
-	// encodeBufferCount 가 1 이면 제출 -> 대기 -> 완료가 완전히 직렬화되어
+	// encodeSlotCount 가 1 이면 제출 -> 대기 -> 완료가 완전히 직렬화되어
 	// async 파이프라인의 의미가 사라진다. 최소 2 를 요구한다.
 	if (!device || config.width == 0 || config.height == 0 ||
-		config.encodeBufferCount < kMinEncodeBufferCount || !IsPowerOfTwo(config.encodeBufferCount))
+		config.encodeSlotCount < kMinEncodeBufferCount || !IsPowerOfTwo(config.encodeSlotCount))
 	{
-		printf_s("[NVENC ERROR] Invalid encoder parameters. width=%u height=%u encodeBufferCount=%u"
-			" (encodeBufferCount must be a power of two and at least %u)\n",
-			config.width, config.height, config.encodeBufferCount, kMinEncodeBufferCount);
+		printf_s("[NVENC ERROR] Invalid encoder parameters. width=%u height=%u encodeSlotCount=%u"
+			" (encodeSlotCount must be a power of two and at least %u)\n",
+			config.width, config.height, config.encodeSlotCount, kMinEncodeBufferCount);
 		return false;
 	}
 
@@ -180,10 +180,10 @@ bool D3D11NvEncoder_Impl::Initialize(
 	m_userConfig = config;
 	m_width = config.width;
 	m_height = config.height;
-	m_encodeBufferCount = config.encodeBufferCount;
+	m_encodeSlotCount = config.encodeSlotCount;
 	m_asyncPipelineEnabled = config.enableAsyncPipeline;
 
-	m_timeStamp = 0;
+	m_timestamp = 0;
 	m_inputSequence = 0;
 	m_outputSequence = 0;
 	::InterlockedExchange(&m_pendingFrameCount, 0);
@@ -192,7 +192,7 @@ bool D3D11NvEncoder_Impl::Initialize(
 
 	// 재초기화면 앞서 등록된 공유 풀은 무효다. RegisterSharedInputPool 을
 	// 다시 불러야 한다.
-	DestroySharedInputPool();
+	UnregisterSharedInputPool();
 	::InterlockedExchange(&m_faulted, FALSE);
 	::InterlockedExchange(&m_debugFailOutputCount, 0);
 	::InterlockedExchange64(&m_submittedFrameCount, 0);
@@ -200,9 +200,9 @@ bool D3D11NvEncoder_Impl::Initialize(
 	::InterlockedExchange64(&m_lostFrameCount, 0);
 
 
-	if (!InitializeSyncEvents())
+	if (!CreateSyncEvents())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeSyncEvents.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateSyncEvents.\n");
 		DestroySyncEvents();
 		SafeRelease(m_D3D11Context);
 		SafeRelease(m_D3D11Device);
@@ -214,7 +214,7 @@ bool D3D11NvEncoder_Impl::Initialize(
 	// 초기화 시퀀스 전체를 한 번의 게이트 획득으로 원자적으로 처리한다.
 	{
 		D3D11ImmediateContextGuard contextGuard(m_contextGate);
-		if (!InitializeEncoderResources())
+		if (!CreateEncoderResources())
 		{
 			DestroySyncEvents();
 			SafeRelease(m_D3D11Context);
@@ -226,18 +226,18 @@ bool D3D11NvEncoder_Impl::Initialize(
 
 	// 완료 스레드는 반드시 게이트 밖에서 시작한다.
 	// 게이트를 잡은 채로 띄우면 그 스레드가 게이트를 요구하는 순간 데드락이다.
-	if (m_asyncPipelineEnabled && !InitializeEncodeCompletionThread())
+	if (m_asyncPipelineEnabled && !CreateEncodeCompletionThread())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeEncodeCompletionThread.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateEncodeCompletionThread.\n");
 		Destroy();
 		return false;
 	}
 
 	// 유입 큐. 소비자가 인코드 스레드 하나뿐이라 여기서 만들어 소유한다.
-	// 동기 파이프라인에는 큐가 없다 — 호출자가 직접 DoEncode 를 돌린다.
-	if (m_asyncPipelineEnabled && !InitializeInputQueue(config.inputQueueDepth))
+	// 동기 파이프라인에는 큐가 없다 — 호출자가 직접 EncodeSync 를 돌린다.
+	if (m_asyncPipelineEnabled && !CreateInputQueue(config.inputQueueDepth))
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeInputQueue.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateInputQueue.\n");
 		Destroy();
 		return false;
 	}
@@ -289,7 +289,7 @@ bool D3D11NvEncoder_Impl::OpenEncodeSession()
 }
 
 // 게이트를 획득한 상태에서 호출된다. 내부에서 게이트를 다시 잡아서는 안 된다.
-bool D3D11NvEncoder_Impl::InitializeEncoderResources()
+bool D3D11NvEncoder_Impl::CreateEncoderResources()
 {
 	// 단계별 초기화 진행
 	// 실패 시 goto 로 정리 순서 보장
@@ -312,51 +312,51 @@ bool D3D11NvEncoder_Impl::InitializeEncoderResources()
 		goto fail_converter;
 	}
 
-	if (!InitializeBGRAtoNV12Converter())
+	if (!CreateBGRAToNV12Converter())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeBGRAtoNV12Converter.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateBGRAToNV12Converter.\n");
 		goto fail_converter;
 	}
 
-	if (!InitializeAsyncEvent())
+	if (!CreateAsyncEvent())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeAsyncEvent.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateAsyncEvent.\n");
 		goto fail_async_event;
 	}
 
-	if (!InitializeBitstreamBuffers())
+	if (!CreateBitstreamBuffers())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeBitstreamBuffers.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateBitstreamBuffers.\n");
 		goto fail_bitstream;
 	}
 
-	if (!InitializeRegisteredResources())
+	if (!CreateRegisteredResources())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeRegisteredResources.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateRegisteredResources.\n");
 		goto fail_registered_resources;
 	}
 
-	if (!InitializeD3D11InputBuffers())
+	if (!CreateD3D11InputBuffers())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeD3D11InputBuffers.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateD3D11InputBuffers.\n");
 		goto fail_input_buffers;
 	}
 
-	if (!InitializeMappedInputBuffers())
+	if (!CreateMappedInputBuffers())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializeMappedInputBuffers.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreateMappedInputBuffers.\n");
 		goto fail_mapped_inputs;
 	}
 
-	if (!InitializePacketBuffers())
+	if (!CreatePacketBuffers())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializePacketBuffers.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreatePacketBuffers.\n");
 		goto fail_output_frames;
 	}
 
-	if (!InitializePendingFrames())
+	if (!CreatePendingFrames())
 	{
-		printf_s("[NVENC ERROR] Initialize stage failed: InitializePendingFrames.\n");
+		printf_s("[NVENC ERROR] Initialize stage failed: CreatePendingFrames.\n");
 		goto fail_in_flight_frames;
 	}
 
@@ -376,7 +376,7 @@ fail_registered_resources:
 fail_bitstream:
 	DestroyAsyncEvent();
 fail_async_event:
-	DestroyBGRAtoNV12Converter();
+	DestroyBGRAToNV12Converter();
 fail_converter:
 	DestroyEncoder();
 	return false;
@@ -559,7 +559,7 @@ void D3D11NvEncoder_Impl::DestroyEncoder()
 	m_encoderHandle = nullptr;
 }
 
-bool D3D11NvEncoder_Impl::InitializeSyncEvents()
+bool D3D11NvEncoder_Impl::CreateSyncEvents()
 {
 	// all-slots-free 는 manual reset, 초기 상태 signaled(= pending 프레임 없음).
 	// frame-submitted 는 auto reset. 완료 스레드를 깨우는 용도.
@@ -590,7 +590,7 @@ void D3D11NvEncoder_Impl::DestroySyncEvents()
 	}
 }
 
-bool D3D11NvEncoder_Impl::InitializeAsyncEvent()
+bool D3D11NvEncoder_Impl::CreateAsyncEvent()
 {
 	// 비동기로 처리되는 NVENC Encode 완료 이벤트를 통지 받기 위한
 	// 이벤트를 생성 후 NVENC 에 Register 한다.
@@ -605,11 +605,11 @@ bool D3D11NvEncoder_Impl::InitializeAsyncEvent()
 		return true;
 
 	// Async Event Create & Register
-	m_slotCompletionEvents = new (std::nothrow) HANDLE[m_encodeBufferCount]{};
+	m_slotCompletionEvents = new (std::nothrow) HANDLE[m_encodeSlotCount]{};
 	if (!m_slotCompletionEvents)
 		return false;
 
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		// 이벤트 생성
 		m_slotCompletionEvents[i] = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -660,7 +660,7 @@ void D3D11NvEncoder_Impl::DestroyAsyncEvent()
 
 	if (m_slotCompletionEvents)
 	{
-		for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+		for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 		{
 			HANDLE& completionEvent = m_slotCompletionEvents[i];
 			if (completionEvent)
@@ -694,11 +694,11 @@ void D3D11NvEncoder_Impl::DestroyAsyncEvent()
 	}
 }
 
-bool D3D11NvEncoder_Impl::InitializeMappedInputBuffers()
+bool D3D11NvEncoder_Impl::CreateMappedInputBuffers()
 {
 	// NVENC Encoding 을 위한 Input Buffer 를 미리 생성한다.
 	// Encode 수행 함수를 호출할때 NV_ENC_INPUT_PTR 타입 필요.
-	m_mappedInputBuffers = new (std::nothrow) NV_ENC_INPUT_PTR[m_encodeBufferCount]{};
+	m_mappedInputBuffers = new (std::nothrow) NV_ENC_INPUT_PTR[m_encodeSlotCount]{};
 	return (m_mappedInputBuffers != nullptr);
 }
 
@@ -714,7 +714,7 @@ void D3D11NvEncoder_Impl::DestroyMappedInputBuffers()
 		return;
 	}
 
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		NV_ENC_INPUT_PTR& mappedInputBuffer = m_mappedInputBuffers[i];
 		if (mappedInputBuffer)
@@ -729,7 +729,7 @@ void D3D11NvEncoder_Impl::DestroyMappedInputBuffers()
 	m_mappedInputBuffers = nullptr;
 }
 
-bool D3D11NvEncoder_Impl::InitializeBitstreamBuffers()
+bool D3D11NvEncoder_Impl::CreateBitstreamBuffers()
 {
 	// NVENC Encode 결과를 저장하기 위한 Output Buffer 생성
 	if (!m_encoderHandle)
@@ -738,11 +738,11 @@ bool D3D11NvEncoder_Impl::InitializeBitstreamBuffers()
 		return false;
 	}
 
-	m_bitstreamBuffers = new (std::nothrow) NV_ENC_OUTPUT_PTR[m_encodeBufferCount]{};
+	m_bitstreamBuffers = new (std::nothrow) NV_ENC_OUTPUT_PTR[m_encodeSlotCount]{};
 	if (!m_bitstreamBuffers)
 		return false;
 
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		// Output Buffer 생성
 		NV_ENC_CREATE_BITSTREAM_BUFFER bitstreamBufferParams = { NV_ENC_CREATE_BITSTREAM_BUFFER_VER };
@@ -768,7 +768,7 @@ void D3D11NvEncoder_Impl::DestroyBitstreamBuffers()
 		return;
 	}
 
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		NV_ENC_OUTPUT_PTR& bitstreamBuffer = m_bitstreamBuffers[i];
 		if (bitstreamBuffer)
@@ -783,11 +783,11 @@ void D3D11NvEncoder_Impl::DestroyBitstreamBuffers()
 	m_bitstreamBuffers = nullptr;
 }
 
-bool D3D11NvEncoder_Impl::InitializeRegisteredResources()
+bool D3D11NvEncoder_Impl::CreateRegisteredResources()
 {
 	// NVENC 내부에서 관리하는 Registered 리소스 핸들을 저장할 공간을 만든다.
 	// NVENC 가 접근하기 위해서는 Encode 호출 전 사전에 미리 Registered 되어야 한다.
-	m_registeredResources = new (std::nothrow) NV_ENC_REGISTERED_PTR[m_encodeBufferCount]{};
+	m_registeredResources = new (std::nothrow) NV_ENC_REGISTERED_PTR[m_encodeSlotCount]{};
 	return (m_registeredResources != nullptr);
 }
 
@@ -802,7 +802,7 @@ void D3D11NvEncoder_Impl::DestroyRegisteredResources()
 		return;
 	}
 
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		NV_ENC_REGISTERED_PTR& registeredResource = m_registeredResources[i];
 		if (registeredResource)
@@ -817,7 +817,7 @@ void D3D11NvEncoder_Impl::DestroyRegisteredResources()
 	m_registeredResources = nullptr;
 }
 
-bool D3D11NvEncoder_Impl::InitializeD3D11InputBuffers()
+bool D3D11NvEncoder_Impl::CreateD3D11InputBuffers()
 {
 	// NVENC 는 NV12 와 같은 특수 타입의 데이터만 Input 으로 받을 수 있다.
 	// 버퍼풀 수량 만큼의 BGRA, NV12 D3D11 Texture2D 를 생성 하고
@@ -834,12 +834,12 @@ bool D3D11NvEncoder_Impl::InitializeD3D11InputBuffers()
 	}
 
 	// BGRA->NV12 변환을 수행 하기 위한 Input BGRA 버퍼
-	m_bgraTextures = new (std::nothrow) ID3D11Texture2D * [m_encodeBufferCount] {};
+	m_bgraTextures = new (std::nothrow) ID3D11Texture2D * [m_encodeSlotCount] {};
 	if (!m_bgraTextures)
 		return false;
 
 	// BGRA->NV12 변환 결과를 저장하기 위한 Output NV12 버퍼
-	m_nv12Textures = new (std::nothrow) ID3D11Texture2D * [m_encodeBufferCount] {};
+	m_nv12Textures = new (std::nothrow) ID3D11Texture2D * [m_encodeSlotCount] {};
 	if (!m_nv12Textures)
 	{
 		// 앞서 할당한 BGRA 배열을 해제하지 않으면 누수한다.
@@ -850,7 +850,7 @@ bool D3D11NvEncoder_Impl::InitializeD3D11InputBuffers()
 	HRESULT hr = S_OK;
 
 	// BGRA 타입 D3D11Texture2D 생성
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		D3D11_TEXTURE2D_DESC texDesc = {};
 		texDesc.Width = GetMaxEncodeWidth();
@@ -873,7 +873,7 @@ bool D3D11NvEncoder_Impl::InitializeD3D11InputBuffers()
 
 
 	// NV12 타입 D3D11Texture2D 생성
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		D3D11_TEXTURE2D_DESC desc = {};
 		desc.Width = GetMaxEncodeWidth();
@@ -897,7 +897,7 @@ bool D3D11NvEncoder_Impl::InitializeD3D11InputBuffers()
 	}
 
 	// NVENC API 는 void* 기반이라 캐스팅을 위한 임시 inputFrames 버퍼 생성
-	void** inputFrames = new (std::nothrow) void* [m_encodeBufferCount] {};
+	void** inputFrames = new (std::nothrow) void* [m_encodeSlotCount] {};
 	if (!inputFrames)
 	{
 		DestroyD3D11InputBuffers();
@@ -905,39 +905,39 @@ bool D3D11NvEncoder_Impl::InitializeD3D11InputBuffers()
 	}
 
 	// D3D11Texture 의 주소만 void* 캐스팅 해서 저장
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		inputFrames[i] = m_nv12Textures[i];
 	}
 
 	// NVENC InputResource 로 등록
-	if (!RegisterInputResources(inputFrames, m_encodeBufferCount, NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX,
+	if (!RegisterInputResources(inputFrames, m_encodeSlotCount, NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX,
 		GetMaxEncodeWidth(), GetMaxEncodeHeight(), GetMaxEncodeWidth(), GetPixelFormat()))
 	{
 		delete[] inputFrames;
 		DestroyD3D11InputBuffers();
 		DestroyRegisteredResources();
-		InitializeRegisteredResources();
+		CreateRegisteredResources();
 		return false;
 	}
 
 	// D3D11VideoProcessorNV12 에게 BGRA -> NV12 변환 입력을 저장하게될 버퍼로 설정
-	if (!SetBGRAInputTexture(m_bgraTextures, m_encodeBufferCount))
+	if (!SetBGRAInputTexture(m_bgraTextures, m_encodeSlotCount))
 	{
 		delete[] inputFrames;
 		DestroyD3D11InputBuffers();
 		DestroyRegisteredResources();
-		InitializeRegisteredResources();
+		CreateRegisteredResources();
 		return false;
 	}
 
 	// D3D11VideoProcessorNV12 에게 BGRA -> NV12 변환 결과를 저장하게될 버퍼로 설정
-	if (!SetNV12OutputTexture(m_nv12Textures, m_encodeBufferCount))
+	if (!SetNV12OutputTexture(m_nv12Textures, m_encodeSlotCount))
 	{
 		delete[] inputFrames;
 		DestroyD3D11InputBuffers();
 		DestroyRegisteredResources();
-		InitializeRegisteredResources();
+		CreateRegisteredResources();
 		return false;
 	}
 
@@ -953,7 +953,7 @@ void D3D11NvEncoder_Impl::DestroyD3D11InputBuffers()
 	// 한쪽만 null 일 때 통째로 return 하면 나머지 배열과 텍스처를 누수한다.
 	if (m_bgraTextures)
 	{
-		for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+		for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 			SafeRelease(m_bgraTextures[i]);
 
 		delete[] m_bgraTextures;
@@ -962,7 +962,7 @@ void D3D11NvEncoder_Impl::DestroyD3D11InputBuffers()
 
 	if (m_nv12Textures)
 	{
-		for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+		for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 			SafeRelease(m_nv12Textures[i]);
 
 		delete[] m_nv12Textures;
@@ -970,7 +970,7 @@ void D3D11NvEncoder_Impl::DestroyD3D11InputBuffers()
 	}
 }
 
-bool D3D11NvEncoder_Impl::InitializeBGRAtoNV12Converter()
+bool D3D11NvEncoder_Impl::CreateBGRAToNV12Converter()
 {
 	// BGRA -> NV12 변환 작업을 해주는 Converter 생성 및 초기화
 	m_converter = new (std::nothrow) D3D11VideoProcessorNV12();
@@ -992,7 +992,7 @@ bool D3D11NvEncoder_Impl::InitializeBGRAtoNV12Converter()
 	return result;
 }
 
-void D3D11NvEncoder_Impl::DestroyBGRAtoNV12Converter()
+void D3D11NvEncoder_Impl::DestroyBGRAToNV12Converter()
 {
 	// BGRA -> NV12 변환 작업을 해주는 Converter 해제
 	if (m_converter)
@@ -1003,12 +1003,12 @@ void D3D11NvEncoder_Impl::DestroyBGRAtoNV12Converter()
 	}
 }
 
-bool D3D11NvEncoder_Impl::InitializePacketBuffers()
+bool D3D11NvEncoder_Impl::CreatePacketBuffers()
 {
 	// Encode 결과를 저장해줄 OutputFrame 생성
 	// 버퍼 수량 만큼의 공간만 할당하고 실제 Encode Result 저장할 공간은
 	// Bitstream 을 읽어올 때 설정한다.
-	m_packetBuffers = new (std::nothrow) NvEncPacketBuffer[m_encodeBufferCount]{};
+	m_packetBuffers = new (std::nothrow) NvEncPacketBuffer[m_encodeSlotCount]{};
 	return (m_packetBuffers != nullptr);
 }
 
@@ -1021,7 +1021,7 @@ void D3D11NvEncoder_Impl::DestroyPacketBuffers()
 		return;
 	}
 
-	for (uint32_t i = 0; i < m_encodeBufferCount; i++)
+	for (uint32_t i = 0; i < m_encodeSlotCount; i++)
 	{
 		ReleasePacketBuffer(m_packetBuffers[i]);
 	}
@@ -1038,13 +1038,13 @@ void D3D11NvEncoder_Impl::ReleasePacketBuffer(NvEncPacketBuffer& frame)
 	frame.streamDataSize = 0;
 	frame.streamDataCapacity = 0;
 	frame.pictureType = NV_ENC_PIC_TYPE_UNKNOWN;
-	frame.timeStamp = 0;
+	frame.timestamp = 0;
 	frame.isKeyFrame = false;
 }
 
-bool D3D11NvEncoder_Impl::InitializePendingFrames()
+bool D3D11NvEncoder_Impl::CreatePendingFrames()
 {
-	m_pendingFrames = new (std::nothrow) NvEncPendingFrame[m_encodeBufferCount]{};
+	m_pendingFrames = new (std::nothrow) NvEncPendingFrame[m_encodeSlotCount]{};
 	return m_pendingFrames != nullptr;
 }
 
@@ -1057,9 +1057,9 @@ void D3D11NvEncoder_Impl::DestroyPendingFrames()
 	m_outputSequence = 0;
 }
 
-bool D3D11NvEncoder_Impl::InitializeEncodeCompletionThread()
+bool D3D11NvEncoder_Impl::CreateEncodeCompletionThread()
 {
-	// 동기 이벤트는 InitializeSyncEvents 가 이미 만들어 두었다.
+	// 동기 이벤트는 CreateSyncEvents 가 이미 만들어 두었다.
 	// 여기서 만들면 스레드와 수명이 묶여 SubmitFrame 이 닫힌 핸들을 볼 수 있다.
 	if (!m_allSlotsFreeEvent || !m_frameSubmittedEvent)
 		return false;
@@ -1133,7 +1133,7 @@ void D3D11NvEncoder_Impl::Destroy()
 		DestroyD3D11InputBuffers();
 		DestroyBitstreamBuffers();
 		DestroyAsyncEvent();
-		DestroyBGRAtoNV12Converter();
+		DestroyBGRAToNV12Converter();
 		DestroyEncoder();
 	}
 
@@ -1155,7 +1155,7 @@ bool D3D11NvEncoder_Impl::StaticFieldsDiffer(const NvEncConfig& a, const NvEncCo
 		|| a.height != b.height
 		|| a.maxWidth != b.maxWidth
 		|| a.maxHeight != b.maxHeight
-		|| a.encodeBufferCount != b.encodeBufferCount
+		|| a.encodeSlotCount != b.encodeSlotCount
 		|| a.enableAsyncPipeline != b.enableAsyncPipeline
 		|| a.latencyMode != b.latencyMode
 		|| a.profile != b.profile
@@ -1243,7 +1243,7 @@ NvEncReconfigureResult D3D11NvEncoder_Impl::Reconfigure(const NvEncConfig& confi
 // 프레임마다 하면 이 구조를 도입한 이유가 사라진다.
 bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, uint32_t count)
 {
-	DestroySharedInputPool();
+	UnregisterSharedInputPool();
 
 	if (!sharedHandles || count == 0)
 		return false;
@@ -1268,7 +1268,7 @@ bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, u
 	if (!m_sharedInputTextures || !m_sharedInputMutexes)
 	{
 		device1->Release();
-		DestroySharedInputPool();
+		UnregisterSharedInputPool();
 		return false;
 	}
 
@@ -1278,7 +1278,7 @@ bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, u
 		{
 			printf_s("[NVENC ERROR] shared handle %u is null.\n", i);
 			device1->Release();
-			DestroySharedInputPool();
+			UnregisterSharedInputPool();
 			return false;
 		}
 
@@ -1291,7 +1291,7 @@ bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, u
 			printf_s("[NVENC ERROR] OpenSharedResource1 failed for slot %u (hr 0x%08X)."
 				" are both devices on the same adapter?\n", i, static_cast<unsigned int>(hr));
 			device1->Release();
-			DestroySharedInputPool();
+			UnregisterSharedInputPool();
 			return false;
 		}
 
@@ -1302,7 +1302,7 @@ bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, u
 			printf_s("[NVENC ERROR] the shared texture for slot %u has no keyed mutex"
 				" (producer must create it with D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX).\n", i);
 			device1->Release();
-			DestroySharedInputPool();
+			UnregisterSharedInputPool();
 			return false;
 		}
 	}
@@ -1314,7 +1314,7 @@ bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, u
 	return true;
 }
 
-void D3D11NvEncoder_Impl::DestroySharedInputPool()
+void D3D11NvEncoder_Impl::UnregisterSharedInputPool()
 {
 	if (m_sharedInputMutexes)
 	{
@@ -1382,7 +1382,7 @@ void D3D11NvEncoder_Impl::StopEncodeThread()
 	m_encodeThread = nullptr;
 }
 
-bool D3D11NvEncoder_Impl::InitializeInputQueue(uint32_t depth)
+bool D3D11NvEncoder_Impl::CreateInputQueue(uint32_t depth)
 {
 	DestroyInputQueue();
 
@@ -1438,7 +1438,7 @@ bool D3D11NvEncoder_Impl::EnqueueFrame(const NvEncInputFrame& frame, bool forceK
 	if (!m_inputQueue)
 		return false;
 
-	return m_inputQueue->EnqueueLatest(frame, forceKeyFrame);
+	return m_inputQueue->EnqueueFrame(frame, forceKeyFrame);
 }
 
 // =============================================================================
@@ -1473,7 +1473,7 @@ void D3D11NvEncoder_Impl::SetKeyFrameRequestCallback(bool (*callback)(void*), vo
 // 프레임 투입
 // =============================================================================
 
-bool D3D11NvEncoder_Impl::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
+bool D3D11NvEncoder_Impl::StageFrame(ID3D11Texture2D* bgraTexture)
 {
 	// Encode 를 수행하기 위한 텍스쳐를 BGRA Texture Pool 에 복사한다.
 	if (!m_encoderHandle)
@@ -1505,7 +1505,7 @@ bool D3D11NvEncoder_Impl::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
 	return true;
 }
 
-// PrepareFrameForEncode 와 하는 일은 같다. 다른 점은 원본이 다른 디바이스가
+// StageFrame 와 하는 일은 같다. 다른 점은 원본이 다른 디바이스가
 // 만든 공유 텍스처라서 keyed mutex 를 잡아야 한다는 것뿐이다.
 //
 // 뮤텍스를 잡고 있는 구간은 CopyResource 하나다. 그게 끝나면 이 디바이스
@@ -1513,7 +1513,7 @@ bool D3D11NvEncoder_Impl::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
 // 변환과 nvEncMapInputResource / nvEncEncodePicture 는 전부 이 디바이스
 // 안의 일이고, 그것들이 드라이버 안에서 얼마나 오래 블로킹하든 생산자
 // 쪽은 아무 영향을 받지 않는다. 이 구조의 전부가 그 한 줄에 있다.
-bool D3D11NvEncoder_Impl::PrepareFrameForEncodeFromSharedSlot(uint32_t slot)
+bool D3D11NvEncoder_Impl::StageFrameFromSharedSlot(uint32_t slot)
 {
 	if (!m_encoderHandle)
 	{
@@ -1617,7 +1617,7 @@ bool D3D11NvEncoder_Impl::SubmitFrame(uint64_t frameId)
 	return true;
 }
 
-bool D3D11NvEncoder_Impl::DoEncode(NvEncPacket& encodeResultPacket)
+bool D3D11NvEncoder_Impl::EncodeSync(NvEncPacket& encodeResultPacket)
 {
 	if (m_asyncPipelineEnabled)
 		return false;
@@ -1647,7 +1647,7 @@ bool D3D11NvEncoder_Impl::WaitForPendingFrames(uint32_t timeoutMilliseconds) con
 bool D3D11NvEncoder_Impl::MapInputResource(uint32_t slot)
 {
 	// EncodeFrame 가 호출 되기 전에 Input Resource Map 수행
-	if (!m_registeredResources || !m_mappedInputBuffers || slot >= m_encodeBufferCount)
+	if (!m_registeredResources || !m_mappedInputBuffers || slot >= m_encodeSlotCount)
 		return false;
 
 	NV_ENC_MAP_INPUT_RESOURCE mapInputResource = { };
@@ -1670,7 +1670,7 @@ bool D3D11NvEncoder_Impl::MapInputResource(uint32_t slot)
 bool D3D11NvEncoder_Impl::UnmapInputResource(uint32_t slot)
 {
 	// EncodeFrame 완료된 후 Input Resource Unmap 수행
-	if (!m_mappedInputBuffers || slot >= m_encodeBufferCount)
+	if (!m_mappedInputBuffers || slot >= m_encodeSlotCount)
 		return false;
 
 	if (m_mappedInputBuffers[slot])
@@ -1694,7 +1694,7 @@ bool D3D11NvEncoder_Impl::EncodePicture(uint32_t slot)
 {
 	// 사전에 Registered 된 Input Resource 의 Texture 를 Encode 한다.
 	// 여기서의 Input 은 NV12 타입일 것이고, Output 은 H264 로 Encode 된 Bitstream Buffer 이다.
-	if (!m_encoderHandle || !m_mappedInputBuffers || !m_bitstreamBuffers || slot >= m_encodeBufferCount)
+	if (!m_encoderHandle || !m_mappedInputBuffers || !m_bitstreamBuffers || slot >= m_encodeSlotCount)
 	{
 		return false;
 	}
@@ -1708,7 +1708,7 @@ bool D3D11NvEncoder_Impl::EncodePicture(uint32_t slot)
 	NV_ENC_PIC_PARAMS picParams = {};
 	picParams.version = NV_ENC_PIC_PARAMS_VER;
 	picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
-	picParams.inputTimeStamp = m_timeStamp++;
+	picParams.inputTimeStamp = m_timestamp++;
 	picParams.inputBuffer = inputBuffer;
 	picParams.bufferFmt = GetPixelFormat();
 	picParams.inputWidth = GetEncodeWidth();
@@ -1768,7 +1768,7 @@ NvEncPacketStatus D3D11NvEncoder_Impl::WaitForEncodeCompletion(uint32_t slot, bo
 	// 이 Event 를 대기하여 동기를 맞춘다.
 	if (m_initParameters.enableEncodeAsync == 0U)
 	{
-		return NvEncPacketStatus::PacketReady;
+		return NvEncPacketStatus::Ready;
 	}
 
 	HANDLE completionEvent = GetCompletionEvent(slot);
@@ -1779,7 +1779,7 @@ NvEncPacketStatus D3D11NvEncoder_Impl::WaitForEncodeCompletion(uint32_t slot, bo
 	const DWORD dwResult = ::WaitForSingleObject(completionEvent, timeoutMilliseconds);
 
 	if (dwResult == WAIT_OBJECT_0)
-		return NvEncPacketStatus::PacketReady;
+		return NvEncPacketStatus::Ready;
 
 	if (dwResult == WAIT_TIMEOUT && !block)
 		return NvEncPacketStatus::NotReady;
@@ -1799,7 +1799,7 @@ NvEncPacketStatus D3D11NvEncoder_Impl::WaitForEncodeCompletion(uint32_t slot, bo
 bool D3D11NvEncoder_Impl::ReadEncodedBitstream(uint32_t slot, NvEncPacket& packet)
 {
 	// Encode 완료를 기다리고 H264 로 Encode 된 Bitstream Buffer 를 읽어온다.
-	if (!m_bitstreamBuffers || !m_packetBuffers || slot >= m_encodeBufferCount)
+	if (!m_bitstreamBuffers || !m_packetBuffers || slot >= m_encodeSlotCount)
 		return false;
 
 	// Encode Result 를 가져오기 위해 NVENC 내부 Bitstream Buffer Lock
@@ -1843,12 +1843,12 @@ bool D3D11NvEncoder_Impl::ReadEncodedBitstream(uint32_t slot, NvEncPacket& packe
 	// 데이터 외 기타 정보 복사
 	frame.streamDataSize = lockBitstreamData.bitstreamSizeInBytes;
 	frame.pictureType = lockBitstreamData.pictureType;
-	frame.timeStamp = lockBitstreamData.outputTimeStamp;
+	frame.timestamp = lockBitstreamData.outputTimeStamp;
 	frame.isKeyFrame = (lockBitstreamData.pictureType == NV_ENC_PIC_TYPE_IDR);
 
 	packet.data = frame.streamData;
 	packet.size = frame.streamDataSize;
-	packet.timestamp = frame.timeStamp;
+	packet.timestamp = frame.timestamp;
 	packet.frameType = static_cast<uint16_t>(frame.pictureType);
 	packet.isKeyFrame = frame.isKeyFrame;
 
@@ -1931,7 +1931,7 @@ NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeC
 	{
 		printf_s("[NVENC ERROR] Pending frame ring is inconsistent. slot=%u pending=%u\n",
 			outputSlot, GetPendingFrameCount());
-		EnterFaultedState(NvEncErrorCode::RingCorrupted);
+		EnterFaultedState(NvEncErrorCode::SlotRingCorrupted);
 		return NvEncOutputResult::Fatal;
 	}
 
@@ -1943,7 +1943,7 @@ NvEncOutputResult D3D11NvEncoder_Impl::ProcessOneOutput(bool block, bool invokeC
 
 	// completion event 를 못 받았으면 NVENC 가 아직 이 슬롯의 입력 리소스를
 	// 잡고 있을 수 있다. Unmap 도 슬롯 재사용도 안전하지 않으므로 복구하지 않는다.
-	if (completionStatus != NvEncPacketStatus::PacketReady)
+	if (completionStatus != NvEncPacketStatus::Ready)
 	{
 		EnterFaultedState(NvEncErrorCode::OutputTimeout);
 		return NvEncOutputResult::Fatal;
@@ -2018,7 +2018,7 @@ void D3D11NvEncoder_Impl::AbortPendingFrames()
 	// 여기서는 WaitForPendingFrames 대기자가 영원히 멈추지 않도록 장부만 비운다.
 	if (m_pendingFrames)
 	{
-		for (uint32_t i = 0; i < m_encodeBufferCount; ++i)
+		for (uint32_t i = 0; i < m_encodeSlotCount; ++i)
 		{
 			if (::InterlockedExchange(&m_pendingFrames[i].submitted, FALSE) == TRUE)
 				::InterlockedIncrement64(&m_lostFrameCount);
@@ -2168,7 +2168,7 @@ void D3D11NvEncoder_Impl::GetStats(NvEncStats& stats) const
 	if (m_inputQueue)
 	{
 		stats.droppedInputQueue = m_inputQueue->GetDropCount();
-		stats.dequeuedFrames = m_inputQueue->GetProcessCount();
+		stats.dequeuedFrames = m_inputQueue->GetDequeuedCount();
 	}
 
 	if (m_encodeThread)
@@ -2212,7 +2212,7 @@ bool D3D11NvEncoder_Impl::CanSubmitFrame() const
 {
 	return m_encoderHandle && m_pendingFrames &&
 		::ReadAcquire(&m_acceptFrames) == TRUE &&
-		GetPendingFrameCount() < m_encodeBufferCount;
+		GetPendingFrameCount() < m_encodeSlotCount;
 }
 
 uint32_t D3D11NvEncoder_Impl::GetPendingFrameCount() const
@@ -2232,17 +2232,17 @@ bool D3D11NvEncoder_Impl::IsFaulted() const
 
 uint32_t D3D11NvEncoder_Impl::GetInputSlotIndex() const
 {
-	return WrapRingIndex(m_inputSequence, m_encodeBufferCount);
+	return WrapRingIndex(m_inputSequence, m_encodeSlotCount);
 }
 
 uint32_t D3D11NvEncoder_Impl::GetOutputSlotIndex() const
 {
-	return WrapRingIndex(m_outputSequence, m_encodeBufferCount);
+	return WrapRingIndex(m_outputSequence, m_encodeSlotCount);
 }
 
 HANDLE D3D11NvEncoder_Impl::GetCompletionEvent(uint32_t slot)
 {
-	return m_slotCompletionEvents && slot < m_encodeBufferCount ? m_slotCompletionEvents[slot] : nullptr;
+	return m_slotCompletionEvents && slot < m_encodeSlotCount ? m_slotCompletionEvents[slot] : nullptr;
 }
 
 inline uint32_t D3D11NvEncoder_Impl::GetEncodeWidth() const

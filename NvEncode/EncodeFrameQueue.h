@@ -18,15 +18,15 @@ class D3D11_NVIDIA_ENCODER_API EncodeFrameQueue
 {
 public:
 	// 공개 입력 타입과 같은 것이다. 앱은 NvEncInputFrame 이라는 이름만 알면 된다.
-	using InputFrameHandle = NvEncInputFrame;
+	using InputFrame = NvEncInputFrame;
 
 	struct EncodeFrameItem
 	{
-		InputFrameHandle frameHandle = {};
+		InputFrame inputFrame = {};
 		bool forceKeyFrame = false;
 	};
 
-	using ReleaseFrameCallback = void (*)(InputFrameHandle& frameHandle, void* userData);
+	using ReleaseFrameCallback = NvEncFrameReleaseCallback;
 
 	enum SlotState : uint8_t
 	{
@@ -40,10 +40,10 @@ public:
 	~EncodeFrameQueue();
 
 	// frameCount 는 2 의 n 승이며 최소 2 여야 한다.
-	// 1 이면 HELD 슬롯이 있는 동안 빈 슬롯이 없어 모든 EnqueueLatest 가 실패한다.
+	// 1 이면 HELD 슬롯이 있는 동안 빈 슬롯이 없어 모든 EnqueueFrame 이 실패한다.
 	//
 	// 2 보다 큰 값은 쓸 수 없는 슬롯을 할당하는 낭비다.
-	// 이 큐는 latest-only 라서 EnqueueLatest 가 항상 이전 프레임을 버리고
+	// 이 큐는 latest-only 라서 EnqueueFrame 이 항상 이전 프레임을 버리고
 	// queuedCount 를 1 로 만든다. 따라서 어느 시점에도 QUEUED 1 개 +
 	// HELD 1 개, 즉 2 슬롯만 사용한다.
 	//
@@ -55,7 +55,7 @@ public:
 	// 리더 스레드가 아직 살아있을 수 있으므로 저장 공간은 해제하지 않는다.
 	void Shutdown();
 
-	bool EnqueueLatest(const InputFrameHandle& frameHandle, bool forceKeyFrame);
+	bool EnqueueFrame(const InputFrame& inputFrame, bool forceKeyFrame);
 	EncodeFrameItem* AcquireReadFrame();
 	void ReleaseReadFrame();
 
@@ -63,11 +63,11 @@ public:
 	// "HELD 프레임이 남아있다(프로그래밍 오류)"를 구분하기 위해 사용한다.
 	bool IsRunning() const;
 
-	uint32_t GetDropCount() const;
-	uint32_t GetProcessCount() const;
+	uint64_t GetDropCount() const;
+	uint32_t GetDequeuedCount() const;
 
 private:
-	void ReleaseFrameHandle(InputFrameHandle& frameHandle);
+	void ReleaseInputFrame(InputFrame& inputFrame);
 	void DropQueuedFrames_NoLock();
 	void ReleaseAllSlots_NoLock();
 	void FreeStorage_NoLock();
@@ -93,8 +93,8 @@ private:
 	// 락 없이 읽히는 상태 / 카운터
 	// =====================================================================
 	alignas(64) volatile LONG m_running = FALSE;
-	volatile LONG m_dropCount = 0;
-	volatile LONG m_processCount = 0;
+	volatile LONG64 m_dropCount = 0;
+	volatile LONG m_dequeuedCount = 0;
 
 	ReleaseFrameCallback m_releaseCallback = nullptr;
 	void* m_releaseCallbackUserData = nullptr;

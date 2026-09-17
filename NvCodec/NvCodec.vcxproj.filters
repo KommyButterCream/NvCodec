@@ -23,7 +23,7 @@
     <ClCompile Include="..\NvEncode\D3D11VideoProcessorNV12.cpp">
       <Filter>NvEncode</Filter>
     </ClCompile>
-    <ClCompile Include="..\NvDecode\DecodeFrameQueue.cpp">
+    <ClCompile Include="..\NvDecode\DecodePacketQueue.cpp">
       <Filter>NvDecode</Filter>
     </ClCompile>
     <ClCompile Include="..\NvDecode\D3D11NvDecoder.cpp">
@@ -67,7 +67,7 @@
     <ClInclude Include="..\NvEncode\NvEncPacket.h">
       <Filter>NvEncode</Filter>
     </ClInclude>
-    <ClInclude Include="..\NvDecode\DecodeFrameQueue.h">
+    <ClInclude Include="..\NvDecode\DecodePacketQueue.h">
       <Filter>NvDecode</Filter>
     </ClInclude>
     <ClInclude Include="..\NvDecode\D3D11NvDecoder.h">

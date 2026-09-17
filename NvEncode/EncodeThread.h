@@ -42,7 +42,7 @@ private:
 	bool QueryKeyFrameRequest();
 
 private:
-	EncodeFrameQueue* m_encodeFrameQueue = nullptr;
+	EncodeFrameQueue* m_inputQueue = nullptr;
 	D3D11NvEncoder_Impl* m_encoder = nullptr;
 
 	// 엔코드 스레드가 읽고 임의의 스레드가 설정할 수 있으므로 잠금이 필요하다.

@@ -54,9 +54,9 @@ namespace Bench
 			uint32_t count = 0;
 		};
 
-		void CountingRelease(EncodeFrameQueue::InputFrameHandle& frameHandle, void* userData)
+		void CountingRelease(EncodeFrameQueue::InputFrame& inputFrame, void* userData)
 		{
-			(void)frameHandle;
+			(void)inputFrame;
 			ReleaseCounter* counter = static_cast<ReleaseCounter*>(userData);
 			if (counter)
 				counter->count++;
@@ -85,9 +85,9 @@ namespace Bench
 			ID3D11Device* device = bench.GetDevice();
 
 			ok &= Check(!encoder.Initialize(device, 640, 480, 1, &gate, true),
-				"encoder rejects encodeBufferCount = 1");
+				"encoder rejects encodeSlotCount = 1");
 			ok &= Check(!encoder.Initialize(device, 640, 480, 3, &gate, true),
-				"encoder rejects encodeBufferCount = 3 (not a power of two)");
+				"encoder rejects encodeSlotCount = 3 (not a power of two)");
 			encoder.Destroy();
 
 			EndCase(ok);
@@ -108,11 +108,11 @@ namespace Bench
 
 			// 처리되지 않은 프레임을 하나 넣어두고 닫는다.
 			// Shutdown 이 생산자에게 반납해야 한다.
-			EncodeFrameQueue::InputFrameHandle handle = {};
+			EncodeFrameQueue::InputFrame handle = {};
 			handle.texture = reinterpret_cast<ID3D11Texture2D*>(0x1);   // 반납 여부만 확인
 			handle.sourceSlotId = 0;
 			handle.frameId = 0;
-			ok &= Check(queue.EnqueueLatest(handle, false), "EnqueueLatest succeeds");
+			ok &= Check(queue.EnqueueFrame(handle, false), "EnqueueFrame succeeds");
 
 			queue.Shutdown();
 			ok &= Check(counter.count == 1, "Shutdown returns the queued frame to the producer");
@@ -123,7 +123,7 @@ namespace Bench
 				"re-Initialize with a different frameCount succeeds");
 
 			// 재초기화 후에도 실제로 동작해야 한다.
-			ok &= Check(queue.EnqueueLatest(handle, false),
+			ok &= Check(queue.EnqueueFrame(handle, false),
 				"queue still accepts frames after re-Initialize");
 
 			EndCase(ok);
@@ -140,7 +140,7 @@ namespace Bench
 			config.height = 720;
 			config.frameCount = 180;
 			config.targetFps = 120;
-			config.encodeBufferCount = 4;
+			config.encodeSlotCount = 4;
 			config.queueFrameCount = 4;
 			config.keyFrameInterval = 60;
 
@@ -176,7 +176,7 @@ namespace Bench
 			config.height = 720;
 			config.frameCount = 180;
 			config.targetFps = 120;
-			config.encodeBufferCount = 4;
+			config.encodeSlotCount = 4;
 			config.queueFrameCount = 4;
 			config.faultInjectAfterFrames = kInjectAt;
 			config.faultInjectCount = kInjectCount;
@@ -214,7 +214,7 @@ namespace Bench
 			config.height = 720;
 			config.frameCount = 180;
 			config.targetFps = 120;
-			config.encodeBufferCount = 4;
+			config.encodeSlotCount = 4;
 			config.queueFrameCount = 4;
 			config.faultInjectAfterFrames = 20;
 			config.faultInjectCount = 64;   // kMaxConsecutiveLostFrames 를 넘긴다
@@ -245,17 +245,17 @@ namespace Bench
 			return ok;
 		}
 
-		// 동기 경로(DoEncode)도 같은 슬롯 회수 규칙을 따라야 한다.
+		// 동기 경로(EncodeSync)도 같은 슬롯 회수 규칙을 따라야 한다.
 		bool TestSyncPipeline(EncodeBench& bench)
 		{
-			BeginCase("sync pipeline (DoEncode) still works after the refactor");
+			BeginCase("sync pipeline (EncodeSync) still works after the refactor");
 
 			BenchConfig config;
 			config.width = 1280;
 			config.height = 720;
 			config.frameCount = 60;
 			config.targetFps = 0;            // 최대 속도
-			config.encodeBufferCount = 2;
+			config.encodeSlotCount = 2;
 			config.asyncPipeline = false;
 
 			BenchResult result = {};
@@ -283,7 +283,7 @@ namespace Bench
 			config.height = 720;
 			config.frameCount = 120;
 			config.targetFps = 120;
-			config.encodeBufferCount = 4;
+			config.encodeSlotCount = 4;
 			config.queueFrameCount = 2;
 			config.keyFrameInterval = 30;
 
@@ -366,7 +366,7 @@ namespace Bench
 			config.height = 720;
 			config.frameCount = 400;
 			config.targetFps = 120;
-			config.encodeBufferCount = 4;
+			config.encodeSlotCount = 4;
 			config.queueFrameCount = 2;
 			config.bitrateBps = 12000000;
 			config.reconfigureAtFrame = 200;
@@ -415,7 +415,7 @@ namespace Bench
 			NvEncConfig config;
 			config.width = 640;
 			config.height = 480;
-			config.encodeBufferCount = 2;
+			config.encodeSlotCount = 2;
 			config.averageBitrateBps = 4000000;
 
 			D3D11NvEncoder encoder;
@@ -487,7 +487,7 @@ namespace Bench
 			config.height = 720;
 			config.frameCount = 60;
 			config.targetFps = 0;
-			config.encodeBufferCount = 4;
+			config.encodeSlotCount = 4;
 			config.queueFrameCount = 4;
 
 			bool ok = true;

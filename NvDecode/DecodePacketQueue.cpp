@@ -1,5 +1,5 @@
 ﻿#include "pch.h"
-#include "DecodeFrameQueue.h"
+#include "DecodePacketQueue.h"
 
 #include <malloc.h>
 #include <assert.h>
@@ -25,7 +25,7 @@ namespace
 		return (memorySize + (alignment - 1)) & ~(alignment - 1);
 	}
 
-	inline size_t FindNextSlotWithState(const DecodeFrameQueue::SlotState* states, size_t bufferCount, size_t start, DecodeFrameQueue::SlotState state)
+	inline size_t FindNextSlotWithState(const DecodePacketQueue::SlotState* states, size_t bufferCount, size_t start, DecodePacketQueue::SlotState state)
 	{
 		// Start Index 부터 시작하여 입력받은 State 와 동일한 Slot Index 를 반환.
 		for (size_t i = 0; i < bufferCount; ++i)
@@ -41,18 +41,18 @@ namespace
 	}
 }
 
-bool DecodeFrameQueue::Initialize(size_t frameCount, size_t bufferSize)
+bool DecodePacketQueue::Initialize(size_t packetCount, size_t bufferSize)
 {
-	m_bufferCount = frameCount;
+	m_packetCount = packetCount;
 
-	if (bufferSize == 0 || frameCount == 0)
+	if (bufferSize == 0 || packetCount == 0)
 	{
-		m_bufferCount = 0;
+		m_packetCount = 0;
 		return false;
 	}
 
 	// 버퍼 수량이 2 의 n 승일 것임을 보장 해야 한다.
-	if (!IsPowerOfTwo(m_bufferCount))
+	if (!IsPowerOfTwo(m_packetCount))
 	{
 		assert(false && "bufferCount must be a power of two");
 		return false;
@@ -62,43 +62,43 @@ bool DecodeFrameQueue::Initialize(size_t frameCount, size_t bufferSize)
 	m_bufferSize = AlignUp(bufferSize, 64);
 
 	// 필요로되는 전체 메모리 크기만큼 선형적 메모리를 할당
-	const size_t totalSize = m_bufferSize * m_bufferCount;
+	const size_t totalSize = m_bufferSize * m_packetCount;
 
 	// 디코딩 Raw 데이터 저장을 위한 1D Linear 버퍼 할당
 	m_buffers = static_cast<uint8_t*>(_aligned_malloc(totalSize, 64));
 	if (!m_buffers)
 	{
-		m_bufferCount = 0;
+		m_packetCount = 0;
 		m_bufferSize = 0;
 		return false;
 	}
 
 	// 디코딩 데이터를 저장할 구조체 버퍼 할당
-	m_items = new DecodeFrameItem[m_bufferCount]();
+	m_items = new DecodePacketItem[m_packetCount]();
 	if (!m_items)
 	{
 		_aligned_free(m_buffers);
 		m_buffers = nullptr;
-		m_bufferCount = 0;
+		m_packetCount = 0;
 		m_bufferSize = 0;
 		return false;
 	}
 
 	// 동일 수량만큼의 Slot 상태 저장하는 버퍼 할당
-	m_states = new SlotState[m_bufferCount]();
+	m_states = new SlotState[m_packetCount]();
 	if (!m_states)
 	{
 		delete[] m_items;
 		m_items = nullptr;
 		_aligned_free(m_buffers);
 		m_buffers = nullptr;
-		m_bufferCount = 0;
+		m_packetCount = 0;
 		m_bufferSize = 0;
 		return false;
 	}
 
 	// 기본값 초기화
-	for (size_t i = 0; i < m_bufferCount; ++i)
+	for (size_t i = 0; i < m_packetCount; ++i)
 	{
 		m_items[i].data = m_buffers + (m_bufferSize * i);
 		m_items[i].size = 0;
@@ -110,7 +110,7 @@ bool DecodeFrameQueue::Initialize(size_t frameCount, size_t bufferSize)
 	return true;
 }
 
-DecodeFrameQueue::~DecodeFrameQueue()
+DecodePacketQueue::~DecodePacketQueue()
 {
 
 	Shutdown();
@@ -134,16 +134,16 @@ DecodeFrameQueue::~DecodeFrameQueue()
 	}
 }
 
-bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
+bool DecodePacketQueue::EnqueuePacket(const InputPacket& packet)
 {
-	// 프레임 핸들을 디코드 프레임 큐 버퍼에 저장한다.
-	// 디코드 프레임 큐는 고정 크기 링 버퍼 형태이다.
-	if (!m_items || !m_buffers || !m_states || (!frameHandle.data && frameHandle.size > 0) || frameHandle.size > m_bufferSize)
+	// 패킷을 큐 버퍼에 복사해 저장한다.
+	// 큐는 고정 크기 링 버퍼 형태이다.
+	if (!m_items || !m_buffers || !m_states || (!packet.data && packet.size > 0) || packet.size > m_bufferSize)
 	{
 		return false;
 	}
 
-	// DecodeFrameQueue 사용 중이 아니라면 종료
+	// DecodePacketQueue 사용 중이 아니라면 종료
 	if (::ReadAcquire(&m_running) == FALSE)
 	{
 		return false;
@@ -156,8 +156,8 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	const bool hasHeldFrame = (::ReadAcquire(&m_hasHeldFrame) == TRUE);
 	const size_t occupiedCount = m_queuedCount + (hasHeldFrame ? 1 : 0);
 
-	// 프레임 핸들을 저장하기 위한 비어 있는 슬롯을 찾는다.
-	if (occupiedCount >= m_bufferCount)
+	// 패킷을 저장하기 위한 비어 있는 슬롯을 찾는다.
+	if (occupiedCount >= m_packetCount)
 	{
 		// 모든 슬롯이 Queued 되어 있어서 사용할 공간이 없는 경우
 		// Latest Read Pos 의 데이터를 drop 하고 해당 슬롯에
@@ -174,7 +174,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 		m_items[droppedIndex].frameId = 0;
 		m_items[droppedIndex].timestamp = 0;
 		m_items[droppedIndex].frameType = 0;
-		m_readPos = FindNextSlotWithState(m_states, m_bufferCount, WrapRingIndex(droppedIndex + 1, m_bufferCount), SLOT_QUEUED);
+		m_readPos = FindNextSlotWithState(m_states, m_packetCount, WrapRingIndex(droppedIndex + 1, m_packetCount), SLOT_QUEUED);
 
 		--m_queuedCount;
 		::InterlockedIncrement64(&m_dropCount);
@@ -183,8 +183,8 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	else
 	{
 		// 사용 가능한 슬롯이 있는 경우 FREE 상태인 슬롯 인덱스 반환
-		const size_t freeIndex = FindNextSlotWithState(m_states, m_bufferCount, m_writePos, SLOT_FREE);
-		if (freeIndex >= m_bufferCount)
+		const size_t freeIndex = FindNextSlotWithState(m_states, m_packetCount, m_writePos, SLOT_FREE);
+		if (freeIndex >= m_packetCount)
 		{
 			::ReleaseSRWLockExclusive(&m_lock);
 			return false;
@@ -194,16 +194,16 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	}
 
 	// 데이터 저장을 위한 슬롯 ID 계산이 끝났으므로 (m_writePos)
-	// 해당 위치에 프레임 데이터를 저장한다.
+	// 해당 위치에 패킷 데이터를 저장한다.
 	// 이때, Encode Raw Data 를 슬롯 버퍼로 Deep-Copy 복사하여 저장한다.
-	DecodeFrameItem& item = m_items[m_writePos];
-	item.size = frameHandle.size;
-	item.frameId = frameHandle.frameId;
-	item.timestamp = frameHandle.timestamp;
-	item.frameType = frameHandle.frameType;
-	if (frameHandle.size > 0)
+	DecodePacketItem& item = m_items[m_writePos];
+	item.size = packet.size;
+	item.frameId = packet.frameId;
+	item.timestamp = packet.timestamp;
+	item.frameType = packet.frameType;
+	if (packet.size > 0)
 	{
-		memcpy(item.data, frameHandle.data, frameHandle.size);
+		memcpy(item.data, packet.data, packet.size);
 	}
 
 	// 해당 슬롯이 Queued 되어있음을 상태 저장
@@ -218,7 +218,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	// Queued Item 수량을 증가시키고
 	// 다음 Write Pos 를 업데이트 한다.
 	++m_queuedCount;
-	m_writePos = WrapRingIndex(m_writePos + 1, m_bufferCount);
+	m_writePos = WrapRingIndex(m_writePos + 1, m_packetCount);
 
 	// 데이터 처리 중이 아니라면 스레드를 깨워 작업을 시키기 위해
 	// Condition_Variable 를 깨운다.
@@ -232,7 +232,7 @@ bool DecodeFrameQueue::EnqueueFrame(const InputFrameHandle& frameHandle)
 	return true;
 }
 
-DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
+DecodePacketQueue::DecodePacketItem* DecodePacketQueue::AcquireReadPacket()
 {
 	// 디코드 스레드 측에서 디코딩할 데이터를 획득하는 함수
 
@@ -244,7 +244,7 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 	::AcquireSRWLockExclusive(&m_lock);
 	while (m_queuedCount == 0)
 	{
-		// Queued 된 프레임이 없는 경우
+		// Queued 된 패킷이 없는 경우
 		// Lock 을 해제하고 Sleep 상태로 들어간다.
 		if (::ReadAcquire(&m_running) == FALSE)
 		{
@@ -255,19 +255,19 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 		::SleepConditionVariableSRW(&m_cv, &m_lock, INFINITE, 0);
 	}
 
-	// EnqueueFrame 내부에서 WakeConditionVariable 로 Sleep 을 깨운 경우
-	// 현재 처리 중인 프레임이 있다면 종료한다.
+	// EnqueuePacket 내부에서 WakeConditionVariable 로 Sleep 을 깨운 경우
+	// 현재 처리 중인 패킷이 있다면 종료한다.
 	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
 	{
 		::ReleaseSRWLockExclusive(&m_lock);
 		return nullptr;
 	}
 
-	// readPos 에 위치한 프레임 데이터를 반환한다.
+	// readPos 에 위치한 패킷 데이터를 반환한다.
 	const size_t heldIndex = m_readPos;
 	m_states[heldIndex] = SLOT_HELD;
 
-	// m_heldPos 를 업데이트 하여 ReleaseReadFrame 에서 사용하도록 한다.
+	// m_heldPos 를 업데이트 하여 ReleaseReadPacket 에서 사용하도록 한다.
 	// 외부에 Buffer Index 를 알리지 않기 위함.
 	m_heldPos = heldIndex;
 	::InterlockedExchange(&m_hasHeldFrame, TRUE);
@@ -278,25 +278,25 @@ DecodeFrameQueue::DecodeFrameItem* DecodeFrameQueue::AcquireReadFrame()
 	{
 		// 처리해야할 데이터가 남아 있는 경우
 		// Queued 되어 있는 Slot 을 찾는다.
-		m_readPos = FindNextSlotWithState(m_states, m_bufferCount, WrapRingIndex(heldIndex + 1, m_bufferCount), SLOT_QUEUED);
+		m_readPos = FindNextSlotWithState(m_states, m_packetCount, WrapRingIndex(heldIndex + 1, m_packetCount), SLOT_QUEUED);
 	}
 	else
 	{
 		// 처리해야할 데이터가 없는 경우
 		// 단순하게 Read Pos 인덱스만 증가
-		m_readPos = WrapRingIndex(heldIndex + 1, m_bufferCount);
+		m_readPos = WrapRingIndex(heldIndex + 1, m_packetCount);
 	}
 
-	DecodeFrameItem* item = &m_items[heldIndex];
+	DecodePacketItem* item = &m_items[heldIndex];
 	::ReleaseSRWLockExclusive(&m_lock);
 
 	return item;
 }
 
-void DecodeFrameQueue::ReleaseReadFrame()
+void DecodePacketQueue::ReleaseReadPacket()
 {
-	// AcquireReadFrame 로 획득한 프레임 데이터를 Release 하는 함수
-	// AcquireReadFrame 에서 설정한 m_heldPos 을 사용한다.
+	// AcquireReadPacket 로 획득한 패킷 데이터를 Release 하는 함수
+	// AcquireReadPacket 에서 설정한 m_heldPos 을 사용한다.
 
 	if (!m_items || !m_states)
 	{
@@ -305,7 +305,7 @@ void DecodeFrameQueue::ReleaseReadFrame()
 
 	::AcquireSRWLockExclusive(&m_lock);
 
-	// 실제로 프레임을 Acquire 했는지 체크 후
+	// 실제로 패킷을 Acquire 했는지 체크 후
 	// 슬롯 상태를 초기화 해준다.
 	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
 	{
@@ -315,12 +315,12 @@ void DecodeFrameQueue::ReleaseReadFrame()
 		m_items[m_heldPos].timestamp = 0;
 		m_items[m_heldPos].frameType = 0;
 		::InterlockedExchange(&m_hasHeldFrame, FALSE);
-		::InterlockedIncrement(&m_processCount);
+		::InterlockedIncrement(&m_dequeuedCount);
 	}
 	::ReleaseSRWLockExclusive(&m_lock);
 }
 
-void DecodeFrameQueue::Shutdown()
+void DecodePacketQueue::Shutdown()
 {
 	// Running State 를 변경 후 Sleep 중인 스레드를 깨워 스레드가 정상 종료 되도록 함
 
@@ -331,23 +331,23 @@ void DecodeFrameQueue::Shutdown()
 	::ReleaseSRWLockExclusive(&m_lock);
 }
 
-bool DecodeFrameQueue::IsRunning() const
+bool DecodePacketQueue::IsRunning() const
 {
 	return ::ReadAcquire(&m_running) != FALSE;
 }
 
-uint32_t DecodeFrameQueue::GetProcessCount() const
+uint32_t DecodePacketQueue::GetDequeuedCount() const
 {
-	return static_cast<uint32_t>(::ReadAcquire(&m_processCount));
+	return static_cast<uint32_t>(::ReadAcquire(&m_dequeuedCount));
 }
 
-uint64_t DecodeFrameQueue::GetDropCount() const
+uint64_t DecodePacketQueue::GetDropCount() const
 {
 	return static_cast<uint64_t>(
 		::ReadAcquire64(&m_dropCount));
 }
 
-size_t DecodeFrameQueue::GetBufferSize() const
+size_t DecodePacketQueue::GetBufferSize() const
 {
 	return m_bufferSize;
 }

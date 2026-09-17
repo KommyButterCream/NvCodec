@@ -30,12 +30,12 @@ namespace Bench
 		// 0 이면 스로틀 없이 최대 속도로 밀어넣는다(인코더 상한 측정용).
 		uint32_t targetFps = 60;
 
-		uint32_t encodeBufferCount = 4;   // 2 의 n 승, 최소 2
+		uint32_t encodeSlotCount = 4;   // 2 의 n 승, 최소 2
 		uint32_t queueFrameCount = 4;     // 2 의 n 승, 최소 2
 		uint32_t sourcePoolCount = 8;     // 생산자 텍스처 풀 크기(= 패턴 종류 수)
 		uint32_t keyFrameInterval = 0;    // 0 이면 키프레임 요청 안 함
 
-		// false 면 큐 펌프 없이 호출 스레드에서 DoEncode 로 동기 인코딩한다.
+		// false 면 큐 펌프 없이 호출 스레드에서 EncodeSync 로 동기 인코딩한다.
 		bool asyncPipeline = true;
 
 		// 콜백에서 소비하는 CPU 시간을 인위적으로 만든다(마이크로초).
@@ -79,8 +79,8 @@ namespace Bench
 	{
 		bool initialized = false;
 
-		uint64_t enqueued = 0;            // EnqueueLatest 성공
-		uint64_t enqueueRejected = 0;     // EnqueueLatest 실패(큐가 슬롯을 못 줌)
+		uint64_t enqueued = 0;            // EnqueueFrame 성공
+		uint64_t enqueueRejected = 0;     // EnqueueFrame 실패(큐가 슬롯을 못 줌)
 		uint64_t producerStalled = 0;     // 소스 풀에 빈 슬롯이 없어 건너뛴 프레임
 		uint64_t encodedPackets = 0;      // 콜백으로 받은 패킷 수
 		uint64_t keyFrames = 0;
@@ -137,7 +137,7 @@ namespace Bench
 		bool RunAsync(const BenchConfig& config, BenchResult& result, D3D11NvEncoder& encoder);
 		bool RunSync(const BenchConfig& config, BenchResult& result, D3D11NvEncoder& encoder);
 
-		static void OnReleaseFrame(NvEncInputFrame& frameHandle, void* userData);
+		static void OnReleaseFrame(NvEncInputFrame& inputFrame, void* userData);
 		static void OnEncodedFrame(const NvEncPacket& packet, void* userData);
 		static void OnEncoderError(NvEncErrorCode errorCode, void* userData);
 

@@ -2,7 +2,7 @@
 #include "DecodeThread.h"
 
 #include "D3D11NvDecoder_Impl.h"
-#include "DecodeFrameQueue.h"
+#include "DecodePacketQueue.h"
 
 #include <stdio.h> // for printf_s
 
@@ -16,19 +16,19 @@ DecodeThread::~DecodeThread()
 	Shutdown();
 }
 
-bool DecodeThread::Initialize(DecodeFrameQueue* queue, D3D11NvDecoder_Impl* decoder)
+bool DecodeThread::Initialize(DecodePacketQueue* queue, D3D11NvDecoder_Impl* decoder)
 {
 	if (!queue || !decoder)
 		return false;
 
 	Shutdown();
 
-	m_decodeFrameQueue = queue;
+	m_inputQueue = queue;
 	m_decoder = decoder;
 
 	if (!Start())
 	{
-		m_decodeFrameQueue = nullptr;
+		m_inputQueue = nullptr;
 		m_decoder = nullptr;
 		return false;
 	}
@@ -39,15 +39,15 @@ bool DecodeThread::Initialize(DecodeFrameQueue* queue, D3D11NvDecoder_Impl* deco
 void DecodeThread::Shutdown()
 {
 	// 디코딩 프레임 큐 부터 종료 알림
-	if (m_decodeFrameQueue)
+	if (m_inputQueue)
 	{
-		m_decodeFrameQueue->Shutdown();
+		m_inputQueue->Shutdown();
 	}
 
 	// 스레드 종료
 	Stop();
 
-	m_decodeFrameQueue = nullptr;
+	m_inputQueue = nullptr;
 	m_decoder = nullptr;
 }
 
@@ -79,25 +79,25 @@ void DecodeThread::Run()
 {
 	while (!IsStopRequested())
 	{
-		// 디코딩 프레임 아이템 하나 획득
-		DecodeFrameQueue::DecodeFrameItem* frameItem = m_decodeFrameQueue->AcquireReadFrame();
-		if (!frameItem)
+		// 큐에서 패킷 하나 획득
+		DecodePacketQueue::DecodePacketItem* packetItem = m_inputQueue->AcquireReadPacket();
+		if (!packetItem)
 		{
 			// 큐가 닫혔으면 정상 종료다.
 			// 그렇지 않다면 HELD 프레임이 남아있다는 뜻이고, 이는 프로그래밍 오류다.
-			if (m_decodeFrameQueue->IsRunning())
+			if (m_inputQueue->IsRunning())
 			{
 				printf_s("[NVDEC ERROR] Decode thread stopping: the queue still holds a frame."
-					" ReleaseReadFrame was not called.\n");
+					" ReleaseReadPacket was not called.\n");
 			}
 			break;
 		}
 
-		if (frameItem->size > 0)
+		if (packetItem->size > 0)
 		{
 			// 디코딩 요청
-			if (m_decoder->Parse(frameItem->data, static_cast<uint32_t>(frameItem->size),
-				frameItem->timestamp, true, false, false))
+			if (m_decoder->Parse(packetItem->data, static_cast<uint32_t>(packetItem->size),
+				packetItem->timestamp, true, false, false))
 			{
 				// 디코딩 결과 프레임을 꺼내 콜백에 넘긴다.
 				//
@@ -117,7 +117,7 @@ void DecodeThread::Run()
 			}
 		}
 
-		// 디코딩 프레임 아이템 반환
-		m_decodeFrameQueue->ReleaseReadFrame();
+		// 꺼낸 패킷 슬롯 반납
+		m_inputQueue->ReleaseReadPacket();
 	}
 }

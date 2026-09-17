@@ -72,7 +72,7 @@ public:
 		ID3D11Device* device,
 		uint32_t width,
 		uint32_t height,
-		uint32_t encodeBufferCount,
+		uint32_t encodeSlotCount,
 		ID3D11ImmediateContextGate* contextGate,
 		bool enableAsyncPipeline = true);
 
@@ -128,8 +128,8 @@ public:
 	// 큐에서 프레임을 꺼내 이 엔코더에 밀어 넣는 워커를 시작한다.
 	// 인코딩 결과는 SetEncodedPacketCallback 으로 등록한 콜백에 그대로 도착한다.
 	// async 파이프라인이 켜진 엔코더에서만 동작한다 — 동기 모드는 아무도 출력을
-	// 회수하지 않아 정지하므로 거절한다. 동기 인코딩은 PrepareFrameForEncode +
-	// DoEncode 를 호출자가 직접 돌린다.
+	// 회수하지 않아 정지하므로 거절한다.
+	// 동기 인코딩은 StageFrame + EncodeSync 를 호출자가 직접 돌린다.
 	//
 	// Destroy 가 자동으로 멈추므로 종료 순서를 신경 쓸 필요가 없다.
 	bool StartEncodeThread();
@@ -163,21 +163,21 @@ public:
 	// =====================================================================
 	// 프레임 투입
 	// =====================================================================
-	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
+	bool StageFrame(ID3D11Texture2D* bgraTexture);
 
 	// 공유 풀의 slot 번째 텍스처를 인코더 입력으로 가져온다.
-	// PrepareFrameForEncode 와 하는 일은 같고, 들어오는 텍스처가
-	// 이 디바이스 것이 아니라 공유 텍스처라는 점만 다르다.
+	// StageFrame 과 하는 일은 같고, 들어오는 텍스처가 이 디바이스 것이
+	// 아니라 공유 텍스처라는 점만 다르다.
 	//
 	// keyed mutex 는 이 안에서 잡았다 놓는다. 복사가 끝나면 인코더는
 	// 자기 BGRA 사본을 갖게 되므로 공유 텍스처를 더 붙들 이유가 없다 —
 	// 뒤따르는 NV12 변환과 NVENC 제출은 전부 이 디바이스 안의 일이다.
 	// 그래서 블로킹하는 구간에는 공유 자원이 걸려 있지 않다.
-	bool PrepareFrameForEncodeFromSharedSlot(uint32_t slot);
+	bool StageFrameFromSharedSlot(uint32_t slot);
 
 	void RequestKeyFrame();
 	bool SubmitFrame(uint64_t frameId);
-	bool DoEncode(NvEncPacket& encodeResultPacket);
+	bool EncodeSync(NvEncPacket& encodeResultPacket);
 	bool WaitForPendingFrames(uint32_t timeoutMilliseconds = 20'000U) const;
 
 	// =====================================================================

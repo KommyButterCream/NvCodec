@@ -24,7 +24,7 @@ enum class NvDecErrorCode : uint32_t
 struct NvDecStats
 {
 	uint64_t parsedPackets = 0;          // Parse 호출 성공 횟수
-	uint64_t dequeuedFrames = 0;         // 유입 큐에서 디코드 스레드가 꺼낸 수
+	uint64_t dequeuedPackets = 0;        // 유입 큐에서 디코드 스레드가 꺼낸 수
 	uint64_t droppedInputQueue = 0;      // 유입 큐가 가득 차 버린 수
 	uint64_t packetsFailed = 0;          // Parse 실패 횟수 (디코드 스레드를 쓸 때만)
 	uint64_t decodedFrames = 0;          // 텍스처까지 완성된 프레임 수
@@ -36,16 +36,12 @@ struct NvDecStats
 	bool faulted = false;
 };
 
-// 디코더 설정.
-//
-// 디코더는 해상도를 스트림에서 읽어오므로 엔코더처럼 런타임 재설정할 항목이 없다.
-// 전부 Initialize 에서만 정한다.
 // 디코더에 넣는 비트스트림 한 덩어리.
 //
-// data 는 EnqueueFrame 이 반환할 때까지만 유효하면 된다 - 큐가 자기 버퍼로
+// data 는 EnqueuePacket 이 반환할 때까지만 유효하면 된다 - 큐가 자기 버퍼로
 // 복사해 간다. 인코더 입력(NvEncInputFrame)이 참조만 싣는 것과 다른 점이다.
 // 그래서 디코더에는 반납 콜백이 없다.
-struct NvDecInputFrame
+struct NvDecPacket
 {
 	const uint8_t* data = nullptr;
 	size_t size = 0;
@@ -54,6 +50,10 @@ struct NvDecInputFrame
 	uint16_t frameType = 0;
 };
 
+// 디코더 설정.
+//
+// 디코더는 해상도를 스트림에서 읽어오므로 엔코더처럼 런타임 재설정할 항목이 없다.
+// 전부 Initialize 에서만 정한다.
 struct NvDecConfig
 {
 	// 디코드 스레드가 꺼내 가는 유입 큐의 슬롯 수.

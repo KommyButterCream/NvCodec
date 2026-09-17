@@ -25,7 +25,7 @@ enum class NvEncPacketStatus : uint8_t
 {
 	Error = 0,
 	NotReady,
-	PacketReady,
+	Ready,
 };
 
 // ProcessOneOutput 의 결과.
@@ -46,7 +46,7 @@ struct NvEncPacketBuffer
 	uint32_t streamDataSize = 0;
 	uint32_t streamDataCapacity = 0;
 	NV_ENC_PIC_TYPE pictureType = NV_ENC_PIC_TYPE::NV_ENC_PIC_TYPE_UNKNOWN;
-	uint64_t timeStamp = 0;
+	uint64_t timestamp = 0;
 	bool isKeyFrame = false;
 };
 
@@ -91,7 +91,7 @@ public:
 	// 공유 입력 풀 (생산자 디바이스 연결)
 	// =====================================================================
 	bool RegisterSharedInputPool(const HANDLE* sharedHandles, uint32_t count);
-	void DestroySharedInputPool();
+	void UnregisterSharedInputPool();
 
 	// =====================================================================
 	// 인코드 스레드 제어
@@ -117,11 +117,11 @@ public:
 	// =====================================================================
 	// 프레임 투입
 	// =====================================================================
-	bool PrepareFrameForEncode(ID3D11Texture2D* bgraTexture);
-	bool PrepareFrameForEncodeFromSharedSlot(uint32_t slot);
+	bool StageFrame(ID3D11Texture2D* bgraTexture);
+	bool StageFrameFromSharedSlot(uint32_t slot);
 	void RequestKeyFrame();
 	bool SubmitFrame(uint64_t frameId);
-	bool DoEncode(NvEncPacket& encodeResultPacket);
+	bool EncodeSync(NvEncPacket& encodeResultPacket);
 	bool WaitForPendingFrames(uint32_t timeoutMilliseconds) const;
 
 	// =====================================================================
@@ -145,7 +145,7 @@ private:
 	bool OpenEncodeSession();
 
 	// 게이트를 획득한 상태에서 호출된다. 내부에서 게이트를 다시 잡아서는 안 된다.
-	bool InitializeEncoderResources();
+	bool CreateEncoderResources();
 
 	// NvEncConfig 를 NVENC 구조체로 옮긴다. Initialize 와 Reconfigure 가 공유한다.
 	// [init] 필드까지 채우는 것은 Initialize 뿐이고, Reconfigure 는 rate control 만 갱신한다.
@@ -160,38 +160,38 @@ private:
 	// 완료 스레드와 수명을 분리해야 한다. 완료 스레드와 함께 만들고 지우면
 	// SubmitFrame(엔코드 스레드)과 WaitForPendingFrames(임의 스레드)가
 	// 이미 닫힌 핸들을 읽는 창이 생긴다.
-	bool InitializeSyncEvents();
+	bool CreateSyncEvents();
 	void DestroySyncEvents();
 
-	bool InitializeAsyncEvent();
+	bool CreateAsyncEvent();
 	void DestroyAsyncEvent();
 
-	bool InitializeMappedInputBuffers();
+	bool CreateMappedInputBuffers();
 	void DestroyMappedInputBuffers();
 
-	bool InitializeBitstreamBuffers();
+	bool CreateBitstreamBuffers();
 	void DestroyBitstreamBuffers();
 
-	bool InitializeRegisteredResources();
+	bool CreateRegisteredResources();
 	void DestroyRegisteredResources();
 
-	bool InitializeD3D11InputBuffers();
+	bool CreateD3D11InputBuffers();
 	void DestroyD3D11InputBuffers();
 
-	bool InitializeBGRAtoNV12Converter();
-	void DestroyBGRAtoNV12Converter();
+	bool CreateBGRAToNV12Converter();
+	void DestroyBGRAToNV12Converter();
 
-	bool InitializePacketBuffers();
+	bool CreatePacketBuffers();
 	void DestroyPacketBuffers();
 	void ReleasePacketBuffer(NvEncPacketBuffer& frame);
 
-	bool InitializePendingFrames();
+	bool CreatePendingFrames();
 	void DestroyPendingFrames();
 
-	bool InitializeEncodeCompletionThread();
+	bool CreateEncodeCompletionThread();
 	void DestroyEncodeCompletionThread();
 
-	bool InitializeInputQueue(uint32_t depth);
+	bool CreateInputQueue(uint32_t depth);
 	void DestroyInputQueue();
 	static void QueueFrameReleaseCallback(NvEncInputFrame& frame, void* userData);
 
@@ -257,7 +257,7 @@ private:
 
 	uint32_t m_width = 0;
 	uint32_t m_height = 0;
-	uint32_t m_encodeBufferCount = 1;
+	uint32_t m_encodeSlotCount = 1;
 	bool m_asyncPipelineEnabled = true;
 
 	// =====================================================================
@@ -293,7 +293,7 @@ private:
 	EncodeCompletionThread* m_encodeCompletionThread = nullptr;
 
 	// 큐 펌프. 앱이 StartEncodeThread 를 부를 때만 생성된다.
-	// 동기 인코딩(PrepareFrameForEncode + DoEncode)에서는 nullptr 로 남는다.
+	// 동기 인코딩(StageFrame + EncodeSync)에서는 nullptr 로 남는다.
 	EncodeThread* m_encodeThread = nullptr;
 
 	// 유입 큐. 소비자가 이 인코더 하나뿐이라 인코더가 소유한다.
@@ -303,7 +303,7 @@ private:
 	// =====================================================================
 	// 투입 측 — 엔코드 스레드가 쓴다
 	// =====================================================================
-	alignas(64) uint64_t m_timeStamp = 0;
+	alignas(64) uint64_t m_timestamp = 0;
 	uint32_t m_inputSequence = 0;
 	volatile LONG64 m_submittedFrameCount = 0;
 

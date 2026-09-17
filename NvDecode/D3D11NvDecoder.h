@@ -91,10 +91,10 @@ public:
 
 	// 디코드 스레드가 꺼내 갈 비트스트림을 넣는다.
 	//
-	// 큐가 자기 버퍼로 복사하므로 frame.data 는 이 호출이 반환하면
+	// 큐가 자기 버퍼로 복사하므로 packet.data 는 이 호출이 반환하면
 	// 재사용해도 된다. 큐가 가득 차면 가장 오래된 것이 버려지고,
 	// 그 수는 GetStats 의 droppedInputQueue 로 나온다.
-	bool EnqueueFrame(const NvDecInputFrame& frame);
+	bool EnqueuePacket(const NvDecPacket& packet);
 
 	// =====================================================================
 	// 콜백 등록

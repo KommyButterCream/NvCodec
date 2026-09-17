@@ -11,7 +11,7 @@
 
 #include "../../Core/Concurrency/WaitableTimer.h"
 #include "../NvDecode/D3D11NvDecoder.h"
-#include "../NvDecode/DecodeFrameQueue.h"
+#include "../NvDecode/DecodePacketQueue.h"
 #include "../NvEncode/D3D11NvEncoder.h"
 
 namespace Bench
@@ -135,7 +135,7 @@ namespace Bench
 		public:
 			HoldingDrainThread(
 				D3D11NvDecoder* decoder,
-				DecodeFrameQueue* queue,
+				DecodePacketQueue* queue,
 				uint32_t holdFrameCount,
 				bool leakFrames,
 				void (*onFrame)(const D3D11NvDecoder::Frame&, void*),
@@ -199,7 +199,7 @@ namespace Bench
 	
 				for (;;)
 				{
-					DecodeFrameQueue::DecodeFrameItem* item = m_queue->AcquireReadFrame();
+					DecodePacketQueue::DecodePacketItem* item = m_queue->AcquireReadPacket();
 					if (!item)
 						break;
 	
@@ -225,13 +225,13 @@ namespace Bench
 						}
 					}
 	
-					m_queue->ReleaseReadFrame();
+					m_queue->ReleaseReadPacket();
 				}
 			}
 	
 		private:
 			D3D11NvDecoder* m_decoder = nullptr;
-			DecodeFrameQueue* m_queue = nullptr;
+			DecodePacketQueue* m_queue = nullptr;
 			uint32_t m_holdFrameCount = 1;
 			bool m_leakFrames = false;
 			void (*m_onFrame)(const D3D11NvDecoder::Frame&, void*) = nullptr;
@@ -257,7 +257,7 @@ namespace Bench
 		const RoundTripConfig* config = nullptr;
 		RoundTripResult* result = nullptr;
 
-		DecodeFrameQueue* decodeQueue = nullptr;
+		DecodePacketQueue* decodeQueue = nullptr;
 		D3D11NvDecoder* decoder = nullptr;
 
 		struct LatencyEntry
@@ -312,11 +312,11 @@ namespace Bench
 
 	namespace
 	{
-		void OnReleaseSourceFrame(NvEncInputFrame& frameHandle, void* userData)
+		void OnReleaseSourceFrame(NvEncInputFrame& inputFrame, void* userData)
 		{
 			RoundTripBench::Impl* impl = static_cast<RoundTripBench::Impl*>(userData);
 			if (impl)
-				impl->ReleaseSourceSlot(static_cast<int32_t>(frameHandle.sourceSlotId));
+				impl->ReleaseSourceSlot(static_cast<int32_t>(inputFrame.sourceSlotId));
 		}
 
 		// 엔코딩이 끝나면 그 비트스트림을 그대로 디코드 큐에 밀어 넣는다.
@@ -334,7 +334,7 @@ namespace Bench
 			}
 			::LeaveCriticalSection(&impl->statsLock);
 
-			NvDecInputFrame handle = {};
+			NvDecPacket handle = {};
 			handle.data = frame.data;
 			handle.size = frame.size;
 			handle.frameId = frame.frameId;
@@ -346,12 +346,12 @@ namespace Bench
 			handle.timestamp = frame.frameId;
 			handle.frameType = frame.frameType;
 
-			// EnqueueFrame 은 데이터를 자기 버퍼로 복사한다.
+			// EnqueuePacket 은 데이터를 자기 버퍼로 복사한다.
 			// 그래서 packet.data 가 콜백 반환 뒤에 재사용돼도 안전하다.
 			// hold/leak 모드면 벤치 큐로, 기본 모드면 디코더가 소유한 큐로 간다.
 			const bool enqueued = impl->decodeQueue
-				? impl->decodeQueue->EnqueueFrame(handle)
-				: impl->decoder->EnqueueFrame(handle);
+				? impl->decodeQueue->EnqueuePacket(handle)
+				: impl->decoder->EnqueuePacket(handle);
 
 			if (!enqueued)
 			{
@@ -547,7 +547,7 @@ namespace Bench
 
 		// hold/leak 모드는 소비자를 벤치가 직접 돌리므로 큐도 벤치가 갖는다.
 		// 기본 모드는 디코더가 자기 큐를 쓰므로 여기서는 만들지 않는다.
-		DecodeFrameQueue benchQueue;
+		DecodePacketQueue benchQueue;
 		if (useHoldingDrain)
 		{
 			if (!benchQueue.Initialize(kDecodeQueueSlots, kDecodeSlotBytes))
@@ -604,7 +604,7 @@ namespace Bench
 		NvEncConfig encoderConfig;
 		encoderConfig.width = config.width;
 		encoderConfig.height = config.height;
-		encoderConfig.encodeBufferCount = config.encodeBufferCount;
+		encoderConfig.encodeSlotCount = config.encodeSlotCount;
 		encoderConfig.inputQueueDepth = 2;
 		encoderConfig.averageBitrateBps = config.bitrateBps;
 		encoderConfig.frameRateNumerator = (config.targetFps > 0) ? config.targetFps : 60U;
@@ -653,7 +653,7 @@ namespace Bench
 			// 스로틀이 없으면 앞서 넣은 프레임이 전부 인코더에 제출되고
 			// 빈 슬롯이 생길 때까지 기다린다.
 			//
-			// 소스 풀만 보고 게이팅하면 안 된다. EnqueueLatest 는 큐가 차면
+			// 소스 풀만 보고 게이팅하면 안 된다. EnqueueFrame 는 큐가 차면
 			// 오래된 프레임을 버리면서 그 소스 슬롯을 곧바로 반납하므로,
 			// 풀은 영원히 비지 않는다. 그러면 300 프레임을 수 마이크로초에
 			// 소진하고 실제로는 한 장만 인코딩된 채 끝난다.
@@ -666,7 +666,7 @@ namespace Bench
 					NvEncStats stats = {};
 					encoder.GetStats(stats);
 					if (stats.submittedFrames >= enqueuedCount
-						&& stats.pendingFrames < config.encodeBufferCount)
+						&& stats.pendingFrames < config.encodeSlotCount)
 					{
 						break;
 					}
@@ -797,7 +797,7 @@ namespace Bench
 		printf_s("=========================================================\n");
 		printf_s(" round trip  %ux%u  fps=%u  encBuf=%u decSlots=%u\n",
 			config.width, config.height, config.targetFps,
-			config.encodeBufferCount, config.decodeSlotCount);
+			config.encodeSlotCount, config.decodeSlotCount);
 		printf_s("=========================================================\n");
 		printf_s(" wall time            : %.3f s\n", result.wallSeconds);
 		printf_s(" encoded packets      : %llu (%.2f MB)\n",

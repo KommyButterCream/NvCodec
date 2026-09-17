@@ -46,14 +46,14 @@ bool D3D11NvEncoder::Initialize(
 	ID3D11Device* device,
 	uint32_t width,
 	uint32_t height,
-	uint32_t encodeBufferCount,
+	uint32_t encodeSlotCount,
 	ID3D11ImmediateContextGate* contextGate,
 	bool enableAsyncPipeline)
 {
 	NvEncConfig config;
 	config.width = width;
 	config.height = height;
-	config.encodeBufferCount = encodeBufferCount;
+	config.encodeSlotCount = encodeSlotCount;
 	config.enableAsyncPipeline = enableAsyncPipeline;
 
 	return Initialize(device, config, contextGate);
@@ -134,14 +134,14 @@ void D3D11NvEncoder::SetKeyFrameRequestCallback(KeyFrameRequestCallback callback
 // 프레임 투입
 // =============================================================================
 
-bool D3D11NvEncoder::PrepareFrameForEncode(ID3D11Texture2D* bgraTexture)
+bool D3D11NvEncoder::StageFrame(ID3D11Texture2D* bgraTexture)
 {
-	return m_impl->PrepareFrameForEncode(bgraTexture);
+	return m_impl->StageFrame(bgraTexture);
 }
 
-bool D3D11NvEncoder::PrepareFrameForEncodeFromSharedSlot(uint32_t slot)
+bool D3D11NvEncoder::StageFrameFromSharedSlot(uint32_t slot)
 {
-	return m_impl->PrepareFrameForEncodeFromSharedSlot(slot);
+	return m_impl->StageFrameFromSharedSlot(slot);
 }
 
 void D3D11NvEncoder::RequestKeyFrame()
@@ -154,9 +154,9 @@ bool D3D11NvEncoder::SubmitFrame(uint64_t frameId)
 	return m_impl->SubmitFrame(frameId);
 }
 
-bool D3D11NvEncoder::DoEncode(NvEncPacket& encodeResultPacket)
+bool D3D11NvEncoder::EncodeSync(NvEncPacket& encodeResultPacket)
 {
-	return m_impl->DoEncode(encodeResultPacket);
+	return m_impl->EncodeSync(encodeResultPacket);
 }
 
 bool D3D11NvEncoder::WaitForPendingFrames(uint32_t timeoutMilliseconds) const

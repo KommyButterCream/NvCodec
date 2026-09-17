@@ -151,7 +151,7 @@ namespace Bench
 		case NvEncErrorCode::OutputReadFailed:  return "OutputReadFailed";
 		case NvEncErrorCode::OutputTimeout:     return "OutputTimeout";
 		case NvEncErrorCode::OutputUnmapFailed: return "OutputUnmapFailed";
-		case NvEncErrorCode::RingCorrupted:     return "RingCorrupted";
+		case NvEncErrorCode::SlotRingCorrupted:     return "SlotRingCorrupted";
 		case NvEncErrorCode::EncoderFaulted:    return "EncoderFaulted";
 		default:                                return "Unknown";
 		}
@@ -296,11 +296,11 @@ namespace Bench
 		}
 	};
 
-	void EncodeBench::OnReleaseFrame(NvEncInputFrame& frameHandle, void* userData)
+	void EncodeBench::OnReleaseFrame(NvEncInputFrame& inputFrame, void* userData)
 	{
 		Impl* impl = static_cast<Impl*>(userData);
 		if (impl)
-			impl->ReleaseSlot(static_cast<int32_t>(frameHandle.sourceSlotId));
+			impl->ReleaseSlot(static_cast<int32_t>(inputFrame.sourceSlotId));
 	}
 
 	void EncodeBench::OnEncodedFrame(const NvEncPacket& packet, void* userData)
@@ -445,7 +445,7 @@ namespace Bench
 		NvEncConfig encoderConfig;
 		encoderConfig.width = config.width;
 		encoderConfig.height = config.height;
-		encoderConfig.encodeBufferCount = config.encodeBufferCount;
+		encoderConfig.encodeSlotCount = config.encodeSlotCount;
 		encoderConfig.inputQueueDepth = config.queueFrameCount;
 		encoderConfig.enableAsyncPipeline = config.asyncPipeline;
 		encoderConfig.latencyMode = config.latencyMode;
@@ -462,8 +462,8 @@ namespace Bench
 		const uint64_t gateCountBeforeInit = m_impl->gate.GetEnterCount();
 		if (!encoder.Initialize(m_device, encoderConfig, &m_impl->gate))
 		{
-			printf_s("[BENCH ERROR] Encoder Initialize failed. encodeBufferCount=%u\n",
-				config.encodeBufferCount);
+			printf_s("[BENCH ERROR] Encoder Initialize failed. encodeSlotCount=%u\n",
+				config.encodeSlotCount);
 			m_impl->config = nullptr;
 			m_impl->result = nullptr;
 			return false;
@@ -550,7 +550,7 @@ namespace Bench
 					NvEncStats stats = {};
 					encoder.GetStats(stats);
 					if (stats.submittedFrames >= result.enqueued
-						&& stats.pendingFrames < config.encodeBufferCount)
+						&& stats.pendingFrames < config.encodeSlotCount)
 					{
 						break;
 					}
@@ -672,7 +672,7 @@ namespace Bench
 
 			m_impl->RecordEnqueue(frameId);
 
-			if (!encoder.PrepareFrameForEncode(source))
+			if (!encoder.StageFrame(source))
 			{
 				result.enqueueRejected++;
 				continue;
@@ -681,7 +681,7 @@ namespace Bench
 			result.enqueued++;
 
 			NvEncPacket packet = {};
-			if (encoder.DoEncode(packet))
+			if (encoder.EncodeSync(packet))
 			{
 				m_impl->RecordPacket(frameId, packet.size, packet.isKeyFrame);
 				m_impl->SpinCallbackDelay();
@@ -711,7 +711,7 @@ namespace Bench
 		printf_s(" %ux%u  %s  buffers=%u queue=%u targetFps=%u\n",
 			config.width, config.height,
 			config.asyncPipeline ? "async" : "sync",
-			config.encodeBufferCount, config.queueFrameCount, config.targetFps);
+			config.encodeSlotCount, config.queueFrameCount, config.targetFps);
 		if (config.callbackDelayMicroseconds > 0)
 		{
 			printf_s(" callback delay       : %u us (spin)\n", config.callbackDelayMicroseconds);

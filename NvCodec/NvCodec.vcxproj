@@ -147,7 +147,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\NvDecode\D3D11NvDecoder.cpp" />
-    <ClCompile Include="..\NvDecode\DecodeFrameQueue.cpp" />
+    <ClCompile Include="..\NvDecode\DecodePacketQueue.cpp" />
     <ClCompile Include="..\NvDecode\D3D11NvDecoder_Impl.cpp" />
     <ClCompile Include="..\NvDecode\DecodeThread.cpp" />
     <ClCompile Include="..\NvEncode\D3D11NvEncoder.cpp" />
@@ -162,7 +162,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\NvDecode\DecodeFrameQueue.h" />
+    <ClInclude Include="..\NvDecode\DecodePacketQueue.h" />
     <ClInclude Include="..\NvDecode\D3D11NvDecoder.h" />
     <ClInclude Include="..\NvDecode\D3D11NvDecoder_Impl.h" />
     <ClInclude Include="..\NvDecode\DecodeThread.h" />

@@ -23,7 +23,7 @@ EncodeFrameQueue::~EncodeFrameQueue()
 bool EncodeFrameQueue::Initialize(uint32_t frameCount, ReleaseFrameCallback releaseCallback, void* userData)
 {
 	// 버퍼 수량이 2 의 n 승일 것임을 보장 해야 한다.
-	// 1 이면 HELD 슬롯이 있는 동안 빈 슬롯이 없어 모든 EnqueueLatest 가 실패한다.
+	// 1 이면 HELD 슬롯이 있는 동안 빈 슬롯이 없어 모든 EnqueueFrame 가 실패한다.
 	if (frameCount < kMinFrameCount || !IsPowerOfTwo(frameCount) || !releaseCallback)
 		return false;
 
@@ -71,8 +71,8 @@ bool EncodeFrameQueue::Initialize(uint32_t frameCount, ReleaseFrameCallback rele
 	}
 
 	::InterlockedExchange(&m_hasHeldFrame, FALSE);
-	::InterlockedExchange(&m_dropCount, 0);
-	::InterlockedExchange(&m_processCount, 0);
+	::InterlockedExchange64(&m_dropCount, 0);
+	::InterlockedExchange(&m_dequeuedCount, 0);
 	::InterlockedExchange(&m_running, TRUE);
 
 	::ReleaseSRWLockExclusive(&m_lock);
@@ -104,7 +104,7 @@ void EncodeFrameQueue::ReleaseAllSlots_NoLock()
 
 	for (uint32_t index = 0; index < m_frameCount; ++index)
 	{
-		ReleaseFrameHandle(m_items[index].frameHandle);
+		ReleaseInputFrame(m_items[index].inputFrame);
 		m_items[index] = EncodeFrameItem();
 		m_states[index] = SLOT_FREE;
 	}
@@ -125,10 +125,10 @@ void EncodeFrameQueue::FreeStorage_NoLock()
 	m_frameCount = 0;
 }
 
-bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool forceKeyFrame)
+bool EncodeFrameQueue::EnqueueFrame(const InputFrame& inputFrame, bool forceKeyFrame)
 {
 	// 외부에서 받아온 FrameHandle 을 참조하여 사용만 하고
-	// ReleaseFrameHandle 로 반환 해주어야 한다.
+	// ReleaseInputFrame 로 반환 해주어야 한다.
 
 	if (!m_items || !m_states)
 		return false;
@@ -141,7 +141,7 @@ bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool f
 	// 예전에는 texture 만 있었고 여기서 null 을 거절했다. 캡처와 인코더가
 	// 서로 다른 디바이스를 쓰게 되면서 texture 포인터를 그대로 넘길 수
 	// 없게 됐고(남의 디바이스 것이다), 그때부터 슬롯 번호가 정식 입력이다.
-	if (!frameHandle.texture && frameHandle.sourceSlotId < 0)
+	if (!inputFrame.texture && inputFrame.sourceSlotId < 0)
 		return false;
 
 	if (::ReadAcquire(&m_running) == FALSE)
@@ -163,7 +163,7 @@ bool EncodeFrameQueue::EnqueueLatest(const InputFrameHandle& frameHandle, bool f
 	// 해당 위치에 프레임 데이터를 저장하고
 	// 해당 슬롯이 Queued 되어있음을 상태 변경
 	m_writePos = freeIndex;
-	m_items[m_writePos].frameHandle = frameHandle;
+	m_items[m_writePos].inputFrame = inputFrame;
 	m_items[m_writePos].forceKeyFrame = forceKeyFrame;
 	m_states[m_writePos] = SLOT_QUEUED;
 	m_readPos = m_writePos;
@@ -221,7 +221,7 @@ EncodeFrameQueue::EncodeFrameItem* EncodeFrameQueue::AcquireReadFrame()
 
 	// 다음 Read Pos 계산
 	//
-	// EnqueueLatest 가 항상 queuedCount 를 1 로 덮어쓰므로 위의 감소 후
+	// EnqueueFrame 가 항상 queuedCount 를 1 로 덮어쓰므로 위의 감소 후
 	// queuedCount 는 반드시 0 이다. 예전에는 여기서 SLOT_QUEUED 를 찾는
 	// 분기가 있었지만 도달 불가능한 죽은 코드였다.
 	m_readPos = WrapIndex(heldIndex + 1);
@@ -245,11 +245,11 @@ void EncodeFrameQueue::ReleaseReadFrame()
 	// 슬롯 상태를 초기화 해준다.
 	if (::ReadAcquire(&m_hasHeldFrame) == TRUE)
 	{
-		ReleaseFrameHandle(m_items[m_heldPos].frameHandle);
+		ReleaseInputFrame(m_items[m_heldPos].inputFrame);
 		m_items[m_heldPos] = EncodeFrameItem();
 		m_states[m_heldPos] = SLOT_FREE;
 		::InterlockedExchange(&m_hasHeldFrame, FALSE);
-		::InterlockedIncrement(&m_processCount);
+		::InterlockedIncrement(&m_dequeuedCount);
 	}
 
 	::ReleaseSRWLockExclusive(&m_lock);
@@ -260,28 +260,28 @@ bool EncodeFrameQueue::IsRunning() const
 	return ::ReadAcquire(&m_running) != FALSE;
 }
 
-uint32_t EncodeFrameQueue::GetDropCount() const
+uint64_t EncodeFrameQueue::GetDropCount() const
 {
-	return static_cast<uint32_t>(::ReadAcquire(&m_dropCount));
+	return static_cast<uint64_t>(::ReadAcquire64(&m_dropCount));
 }
 
-uint32_t EncodeFrameQueue::GetProcessCount() const
+uint32_t EncodeFrameQueue::GetDequeuedCount() const
 {
-	return static_cast<uint32_t>(::ReadAcquire(&m_processCount));
+	return static_cast<uint32_t>(::ReadAcquire(&m_dequeuedCount));
 }
 
-void EncodeFrameQueue::ReleaseFrameHandle(InputFrameHandle& frameHandle)
+void EncodeFrameQueue::ReleaseInputFrame(InputFrame& inputFrame)
 {
 	// 외부에서 받아온 FrameHandle 을 반환 해주기 위한 Callback 호출
 
-	// EnqueueLatest 와 같은 기준이다. 슬롯만 실려 온 프레임도 반납해야
+	// EnqueueFrame 와 같은 기준이다. 슬롯만 실려 온 프레임도 반납해야
 	// 한다 — 반납을 빼먹으면 그 슬롯이 영구히 묶인다.
-	if (!frameHandle.texture && frameHandle.sourceSlotId < 0)
+	if (!inputFrame.texture && inputFrame.sourceSlotId < 0)
 		return;
 
 	if (m_releaseCallback)
 	{
-		m_releaseCallback(frameHandle, m_releaseCallbackUserData);
+		m_releaseCallback(inputFrame, m_releaseCallbackUserData);
 	}
 }
 
@@ -294,11 +294,11 @@ void EncodeFrameQueue::DropQueuedFrames_NoLock()
 		if (m_states[index] != SLOT_QUEUED)
 			continue;
 
-		ReleaseFrameHandle(m_items[index].frameHandle);
+		ReleaseInputFrame(m_items[index].inputFrame);
 
 		m_items[index] = EncodeFrameItem();
 		m_states[index] = SLOT_FREE;
-		::InterlockedIncrement(&m_dropCount);
+		::InterlockedIncrement64(&m_dropCount);
 	}
 
 	m_queuedCount = 0;

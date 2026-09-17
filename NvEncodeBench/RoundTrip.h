@@ -27,7 +27,7 @@ namespace Bench
 		uint32_t frameCount = 240;
 		uint32_t targetFps = 60;
 
-		uint32_t encodeBufferCount = 4;
+		uint32_t encodeSlotCount = 4;
 		uint32_t decodeSlotCount = 8;
 		uint32_t bitrateBps = 8000000;
 

@@ -5,7 +5,7 @@
 #include "D3D11NvDecoder.h"
 
 class D3D11NvDecoder_Impl;
-class DecodeFrameQueue;
+class DecodePacketQueue;
 
 // 큐에서 패킷을 꺼내 디코더에 먹이고, 나온 프레임을 콜백으로 넘기는 워커.
 //
@@ -26,7 +26,7 @@ public:
 	DecodeThread(const DecodeThread&) = delete;
 	DecodeThread& operator=(const DecodeThread&) = delete;
 
-	bool Initialize(DecodeFrameQueue* queue, D3D11NvDecoder_Impl* decoder);
+	bool Initialize(DecodePacketQueue* queue, D3D11NvDecoder_Impl* decoder);
 	void Shutdown();
 
 	void SetFrameCallback(FrameCallback callback, void* userData);
@@ -42,7 +42,7 @@ private:
 	void DispatchFrame(const D3D11NvDecoder::Frame& frame);
 
 private:
-	DecodeFrameQueue* m_decodeFrameQueue = nullptr;
+	DecodePacketQueue* m_inputQueue = nullptr;
 	D3D11NvDecoder_Impl* m_decoder = nullptr;
 
 	FrameCallback m_frameCallback = nullptr;

@@ -2,7 +2,7 @@
 #include "D3D11NvDecoder_Impl.h"
 
 #include "DecodeThread.h"
-#include "DecodeFrameQueue.h"
+#include "DecodePacketQueue.h"
 
 #include <cudaD3D11.h>
 #include <malloc.h>
@@ -205,8 +205,8 @@ bool D3D11NvDecoder_Impl::Initialize(
 	m_config = config;
 	m_outputSlotCount = config.outputSlotCount;
 
-	::InterlockedExchange(&m_writeSequence, 0);
-	::InterlockedExchange(&m_readSequence, 0);
+	::InterlockedExchange(&m_inputSequence, 0);
+	::InterlockedExchange(&m_outputSequence, 0);
 	::InterlockedExchange(&m_faulted, FALSE);
 	::InterlockedExchange(&m_consecutiveLostFrames, 0);
 	::InterlockedExchange(&m_framesHeldByApp, 0);
@@ -224,16 +224,16 @@ bool D3D11NvDecoder_Impl::Initialize(
 
 	// 디코더 생성을 위한 Cuda Driver 초기화, Context 생성/획득,
 	// NVDEC 사용을 위한 ctxLock / Stream / Event / Parser 리소스 생성
-	if (!InitializeCuda())
+	if (!CreateCudaContext())
 	{
 		Destroy();
 		return false;
 	}
 
 	// 유입 큐. 소비자가 디코드 스레드 하나뿐이라 여기서 만들어 소유한다.
-	if (!InitializeInputQueue(config.inputQueueDepth, config.maxPacketSize))
+	if (!CreateInputQueue(config.inputQueueDepth, config.maxPacketSize))
 	{
-		printf_s("[NVDEC ERROR] Initialize stage failed: InitializeInputQueue.\n");
+		printf_s("[NVDEC ERROR] Initialize stage failed: CreateInputQueue.\n");
 		Destroy();
 		return false;
 	}
@@ -241,7 +241,7 @@ bool D3D11NvDecoder_Impl::Initialize(
 	return true;
 }
 
-bool D3D11NvDecoder_Impl::InitializeCuda()
+bool D3D11NvDecoder_Impl::CreateCudaContext()
 {
 	// 디코더 생성을 위한 Cuda Driver 초기화, Cuda Context 생성/획득,
 	// NVDEC 사용을 위한 ctxLock, Stream, Event, Parser 리소스 생성까지 한다.
@@ -490,7 +490,7 @@ void D3D11NvDecoder_Impl::DestroyOutputSlots()
 	}
 }
 
-bool D3D11NvDecoder_Impl::CreateBgraStagingBuffers()
+bool D3D11NvDecoder_Impl::CreateBGRAStagingBuffers()
 {
 	// BGRA 32 Bit 변환 결과가 저장될 Cuda Memory 생성
 
@@ -500,7 +500,7 @@ bool D3D11NvDecoder_Impl::CreateBgraStagingBuffers()
 		return false;
 	}
 
-	DestroyBgraStagingBuffers();
+	DestroyBGRAStagingBuffers();
 	m_bgraStagingPitch = 0;
 
 	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
@@ -514,7 +514,7 @@ bool D3D11NvDecoder_Impl::CreateBgraStagingBuffers()
 			m_videoFormatDesc.lumaHeight,
 			16)))
 		{
-			DestroyBgraStagingBuffers();
+			DestroyBGRAStagingBuffers();
 			return false;
 		}
 	}
@@ -522,7 +522,7 @@ bool D3D11NvDecoder_Impl::CreateBgraStagingBuffers()
 	return true;
 }
 
-void D3D11NvDecoder_Impl::DestroyBgraStagingBuffers()
+void D3D11NvDecoder_Impl::DestroyBGRAStagingBuffers()
 {
 	// Cuda Device 메모리 해제
 	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
@@ -596,7 +596,7 @@ void D3D11NvDecoder_Impl::Destroy()
 			// Decode 수행 중인 프레임이 있다면 전부 기다린 후에 해제한다.
 			WaitForAllSlots();
 			DestroyOutputSlots();
-			DestroyBgraStagingBuffers();
+			DestroyBGRAStagingBuffers();
 
 			if (m_decoder)
 			{
@@ -637,8 +637,8 @@ void D3D11NvDecoder_Impl::Destroy()
 
 	m_videoFormatDesc = {};
 	::ZeroMemory(&m_cuVideoFormat, sizeof(m_cuVideoFormat));
-	::InterlockedExchange(&m_writeSequence, 0);
-	::InterlockedExchange(&m_readSequence, 0);
+	::InterlockedExchange(&m_inputSequence, 0);
+	::InterlockedExchange(&m_outputSequence, 0);
 	::InterlockedExchange(&m_reconfiguring, FALSE);
 	::InterlockedExchange(&m_framesHeldByApp, 0);
 	m_cachedTextureWidth = 0;
@@ -735,7 +735,7 @@ int32_t D3D11NvDecoder_Impl::ReconfigureDecoder(CUVIDEOFORMAT* videoFormat)
 
 	// 리소스 해제
 	DestroyOutputSlots();
-	DestroyBgraStagingBuffers();
+	DestroyBGRAStagingBuffers();
 
 	// VideoFormatDesc 업데이트
 	m_videoFormatDesc.codedWidth = videoFormat->coded_width;
@@ -771,17 +771,17 @@ int32_t D3D11NvDecoder_Impl::ReconfigureDecoder(CUVIDEOFORMAT* videoFormat)
 	}
 
 	// 새로운 해상도에 맞추어 리소스 재생성
-	if (!CreateOutputSlots() || !CreateBgraStagingBuffers())
+	if (!CreateOutputSlots() || !CreateBGRAStagingBuffers())
 	{
 		DestroyOutputSlots();
-		DestroyBgraStagingBuffers();
+		DestroyBGRAStagingBuffers();
 		return static_cast<int32_t>(SequenceResult::Failed);
 	}
 
 	// 기타 정보 재생성
 	m_cuVideoFormat = *videoFormat;
-	m_writeSequence = 0;
-	m_readSequence = 0;
+	m_inputSequence = 0;
+	m_outputSequence = 0;
 
 	return m_videoFormatDesc.decodeSurfaceCount;
 }
@@ -831,11 +831,11 @@ void D3D11NvDecoder_Impl::StopDecodeThread()
 	m_decodeThread = nullptr;
 }
 
-bool D3D11NvDecoder_Impl::InitializeInputQueue(size_t depth, size_t bufferSize)
+bool D3D11NvDecoder_Impl::CreateInputQueue(size_t depth, size_t bufferSize)
 {
 	DestroyInputQueue();
 
-	m_inputQueue = new (std::nothrow) DecodeFrameQueue();
+	m_inputQueue = new (std::nothrow) DecodePacketQueue();
 	if (!m_inputQueue)
 		return false;
 
@@ -860,12 +860,12 @@ void D3D11NvDecoder_Impl::DestroyInputQueue()
 	m_inputQueue = nullptr;
 }
 
-bool D3D11NvDecoder_Impl::EnqueueFrame(const NvDecInputFrame& frame)
+bool D3D11NvDecoder_Impl::EnqueuePacket(const NvDecPacket& packet)
 {
 	if (!m_inputQueue)
 		return false;
 
-	return m_inputQueue->EnqueueFrame(frame);
+	return m_inputQueue->EnqueuePacket(packet);
 }
 
 // =============================================================================
@@ -1028,7 +1028,7 @@ int32_t D3D11NvDecoder_Impl::OnVideoSequence(CUVIDEOFORMAT* videoFormat)
 	videoFormatDesc.eCodec = videoFormat->codec;
 	videoFormatDesc.eChromaFormat = videoFormat->chroma_format;
 	videoFormatDesc.bitDepthMinus8 = videoFormat->bit_depth_luma_minus8;
-	videoFormatDesc.bitPerPixel = videoFormat->bit_depth_luma_minus8 > 0 ? 2 : 1;
+	videoFormatDesc.bitsPerPixel = videoFormat->bit_depth_luma_minus8 > 0 ? 2 : 1;
 
 	if (videoFormat->chroma_format == cudaVideoChromaFormat_420 || videoFormat->chroma_format == cudaVideoChromaFormat_Monochrome)
 		videoFormatDesc.eOutputFormat = videoFormat->bit_depth_luma_minus8 ? cudaVideoSurfaceFormat_P016 : cudaVideoSurfaceFormat_NV12;
@@ -1078,10 +1078,10 @@ int32_t D3D11NvDecoder_Impl::OnVideoSequence(CUVIDEOFORMAT* videoFormat)
 	}
 
 	// Decode 결과를 저장할 출력 버퍼 생성
-	if (!CreateOutputSlots() || !CreateBgraStagingBuffers())
+	if (!CreateOutputSlots() || !CreateBGRAStagingBuffers())
 	{
 		DestroyOutputSlots();
-		DestroyBgraStagingBuffers();
+		DestroyBGRAStagingBuffers();
 		NVDEC_API_CALL(cuvidDestroyDecoder(m_decoder));
 		m_decoder = nullptr;
 		m_videoFormatDesc = {};
@@ -1089,8 +1089,8 @@ int32_t D3D11NvDecoder_Impl::OnVideoSequence(CUVIDEOFORMAT* videoFormat)
 		return 0;
 	}
 
-	m_writeSequence = 0;
-	m_readSequence = 0;
+	m_inputSequence = 0;
+	m_outputSequence = 0;
 
 	return decodeSurfaceCount;
 }
@@ -1170,14 +1170,14 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	mappedVideoFrame = true;
 
 	// Atomic 하게 Current Write, Read Pos 를 읽어온다.
-	currentWrite = ::ReadAcquire(&m_writeSequence);
-	currentRead = ::ReadAcquire(&m_readSequence);
+	currentWrite = ::ReadAcquire(&m_inputSequence);
+	currentRead = ::ReadAcquire(&m_outputSequence);
 	if ((currentWrite - currentRead) >= static_cast<LONG>(m_outputSlotCount))
 	{
 		// 앱이 가져가지 않아 링이 한 바퀴 찼다. 오래된 것을 버리고 진행한다.
 		const LONG skipTo = currentWrite - static_cast<LONG>(m_outputSlotCount) + 1;
 		::InterlockedExchangeAdd64(&m_droppedNotConsumedCount, skipTo - currentRead);
-		::InterlockedExchange(&m_readSequence, skipTo);
+		::InterlockedExchange(&m_outputSequence, skipTo);
 	}
 
 	slot = static_cast<uint32_t>(currentWrite) & (m_outputSlotCount - 1U);
@@ -1264,7 +1264,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	// 텍스처 내용은 이 배리어의 관할이 아니다. 그쪽은 GPU 가 쓰므로
 	// m_decodeCompleteEvents 와 AcquireFrame 의 cuEventSynchronize 가 담당한다.
 	m_frames[slot].timestamp = displayInfo->timestamp;
-	::InterlockedIncrement(&m_writeSequence);
+	::InterlockedIncrement(&m_inputSequence);
 	::InterlockedIncrement64(&m_decodedFrameCount);
 	NoteHealthyFrame();
 
@@ -1303,8 +1303,8 @@ D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
 		return nullptr;
 	}
 
-	LONG currentWrite = ::ReadAcquire(&m_writeSequence);
-	LONG currentRead = ::ReadAcquire(&m_readSequence);
+	LONG currentWrite = ::ReadAcquire(&m_inputSequence);
+	LONG currentRead = ::ReadAcquire(&m_outputSequence);
 
 	if (currentRead >= currentWrite)
 	{
@@ -1321,7 +1321,7 @@ D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
 		const LONG skipped = skipTarget - currentRead;
 		if (skipped > 0)
 		{
-			::InterlockedExchange(&m_readSequence, skipTarget);
+			::InterlockedExchange(&m_outputSequence, skipTarget);
 			::InterlockedExchangeAdd64(&m_droppedNotConsumedCount, skipped);
 			currentRead = skipTarget;
 			InvokeErrorCallback(NvDecErrorCode::OutputNotConsumed);
@@ -1355,7 +1355,7 @@ D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
 
 	::InterlockedExchange(&m_slotHeldByApp[slot], TRUE);
 	::InterlockedIncrement(&m_framesHeldByApp);
-	::InterlockedIncrement(&m_readSequence);
+	::InterlockedIncrement(&m_outputSequence);
 	::InterlockedIncrement64(&m_deliveredFrameCount);
 
 	m_frames[slot].slot = slot;
@@ -1457,7 +1457,7 @@ void D3D11NvDecoder_Impl::GetStats(NvDecStats& stats) const
 	if (m_inputQueue)
 	{
 		stats.droppedInputQueue = m_inputQueue->GetDropCount();
-		stats.dequeuedFrames = m_inputQueue->GetProcessCount();
+		stats.dequeuedPackets = m_inputQueue->GetDequeuedCount();
 	}
 
 	if (m_decodeThread)
@@ -1475,15 +1475,15 @@ bool D3D11NvDecoder_Impl::IsFaulted() const
 	return ::ReadAcquire(&m_faulted) == TRUE;
 }
 
-uint32_t D3D11NvDecoder_Impl::GetWriteSlotIndex() const
+uint32_t D3D11NvDecoder_Impl::GetInputSlotIndex() const
 {
-	const LONG sequence = ::ReadAcquire(&m_writeSequence);
+	const LONG sequence = ::ReadAcquire(&m_inputSequence);
 	return static_cast<uint32_t>(sequence) & (m_outputSlotCount - 1U);
 }
 
-uint32_t D3D11NvDecoder_Impl::GetReadSlotIndex() const
+uint32_t D3D11NvDecoder_Impl::GetOutputSlotIndex() const
 {
-	const LONG sequence = ::ReadAcquire(&m_readSequence);
+	const LONG sequence = ::ReadAcquire(&m_outputSequence);
 	return static_cast<uint32_t>(sequence) & (m_outputSlotCount - 1U);
 }
 

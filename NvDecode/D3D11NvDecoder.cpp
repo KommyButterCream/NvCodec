@@ -67,9 +67,9 @@ bool D3D11NvDecoder::StartDecodeThread()
 	return m_impl ? m_impl->StartDecodeThread() : false;
 }
 
-bool D3D11NvDecoder::EnqueueFrame(const NvDecInputFrame& frame)
+bool D3D11NvDecoder::EnqueuePacket(const NvDecPacket& packet)
 {
-	return m_impl ? m_impl->EnqueueFrame(frame) : false;
+	return m_impl ? m_impl->EnqueuePacket(packet) : false;
 }
 
 void D3D11NvDecoder::StopDecodeThread()

@@ -21,14 +21,14 @@ class EncodeCompletionThread;
 class EncodeFrameQueue;
 class EncodeThread;
 
-enum class NvEncPacketStatus : uint8_t
+enum class NvEncSlotStatus : uint8_t
 {
 	Error = 0,
 	NotReady,
 	Ready,
 };
 
-// CompleteOldestFrame 의 결과.
+// ProcessEncodeCompletion 의 결과.
 // Completed : 비트스트림까지 회수하고 슬롯을 반납했다.
 // NotReady  : 아직 완료되지 않음. 슬롯을 그대로 유지한다.
 // FrameLost : 프레임 1장을 버렸지만 슬롯은 회수했다. 파이프라인은 계속 돈다.
@@ -150,22 +150,23 @@ private:
 
 	// NvEncConfig 를 NVENC 구조체로 옮긴다. Initialize 와 Reconfigure 가 공유한다.
 	// [init] 필드까지 채우는 것은 Initialize 뿐이고, Reconfigure 는 rate control 만 갱신한다.
-	void ApplyStaticConfig(const NvEncConfig& config);
+	void ApplyInitOnlyConfig(const NvEncConfig& config);
 	void ApplyRateControlConfig(const NvEncConfig& config);
-	static bool StaticFieldsDiffer(const NvEncConfig& a, const NvEncConfig& b);
+	static bool InitOnlyFieldsDiffer(const NvEncConfig& a, const NvEncConfig& b);
 
 	bool InitializeEncoder();
 	void DestroyEncoder();
 
-	// pending / all-slots-free 동기 이벤트.
+	// 파이프라인 자체의 이벤트 두 개 — all-slots-free 와 frame-submitted.
+	// NVENC 가 신호하는 완료 이벤트(CreateCompletionEvents)와는 별개다.
 	// 완료 스레드와 수명을 분리해야 한다. 완료 스레드와 함께 만들고 지우면
 	// SubmitFrame(엔코드 스레드)과 WaitForPendingFrames(임의 스레드)가
 	// 이미 닫힌 핸들을 읽는 창이 생긴다.
-	bool CreateSyncEvents();
-	void DestroySyncEvents();
+	bool CreatePipelineEvents();
+	void DestroyPipelineEvents();
 
-	bool CreateAsyncEvent();
-	void DestroyAsyncEvent();
+	bool CreateCompletionEvents();
+	void DestroyCompletionEvents();
 
 	bool CreateMappedInputBuffers();
 	void DestroyMappedInputBuffers();
@@ -176,15 +177,15 @@ private:
 	bool CreateRegisteredResources();
 	void DestroyRegisteredResources();
 
-	bool CreateD3D11InputBuffers();
-	void DestroyD3D11InputBuffers();
+	bool CreateInputTextures();
+	void DestroyInputTextures();
 
 	bool CreateBGRAToNV12Converter();
 	void DestroyBGRAToNV12Converter();
 
 	bool CreatePacketBuffers();
 	void DestroyPacketBuffers();
-	void ReleasePacketBuffer(NvEncPacketBuffer& frame);
+	void ReleasePacketBuffer(NvEncPacketBuffer& packetBuffer);
 
 	bool CreatePendingFrames();
 	void DestroyPendingFrames();
@@ -201,27 +202,27 @@ private:
 	bool UnmapInputResource(uint32_t slot);
 
 	bool EncodePicture(uint32_t slot);
-	NvEncPacketStatus WaitForEncodeCompletion(uint32_t slot, bool block);
+	NvEncSlotStatus WaitForEncodeCompletion(uint32_t slot, bool block);
 	bool ReadEncodedBitstream(uint32_t slot, NvEncPacket& packet);
 	bool Flush();
 
 	// 가장 오래된 제출 프레임 하나를 끝낸다 — 완료 대기, 비트스트림 회수,
 	// 입력 리소스 unmap, 슬롯 반납까지. 완료 스레드와 동기 경로가 함께 쓴다.
-	NvEncCompletionResult CompleteOldestFrame(bool block, bool invokeCallback, NvEncPacket* outPacket = nullptr);
+	NvEncCompletionResult ProcessEncodeCompletion(bool block, bool invokeCallback, NvEncPacket* outPacket = nullptr);
 	void ClearPendingFrame(uint32_t slot);
 	void AbortPendingFrames();
 	void SignalAllSlotsFree();
 
 	// --- 입력 리소스 등록 ---
-	bool RegisterResource(void* buffer, NV_ENC_INPUT_RESOURCE_TYPE eResourceType,
-		uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT eBufferFormat, NV_ENC_BUFFER_USAGE eBufferUsage,
+	bool RegisterResource(void* buffer, NV_ENC_INPUT_RESOURCE_TYPE resourceType,
+		uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT bufferFormat, NV_ENC_BUFFER_USAGE bufferUsage,
 		NV_ENC_REGISTERED_PTR& registeredResource);
 
-	bool RegisterInputResources(void** inputFrames, uint32_t inputFrameCount, NV_ENC_INPUT_RESOURCE_TYPE eResourceType,
-		uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT eBufferFormat);
+	bool RegisterInputResources(void** inputFrames, uint32_t inputFrameCount, NV_ENC_INPUT_RESOURCE_TYPE resourceType,
+		uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT bufferFormat);
 
-	bool SetNV12OutputTexture(ID3D11Texture2D** textures, uint32_t bufferCount);
-	bool SetBGRAInputTexture(ID3D11Texture2D** textures, uint32_t bufferCount);
+	bool SetConverterOutputTextures(ID3D11Texture2D** textures, uint32_t bufferCount);
+	bool SetConverterInputTextures(ID3D11Texture2D** textures, uint32_t bufferCount);
 
 	// --- 오류 / 콜백 통지 ---
 	void EnterFaultedState(NvEncErrorCode errorCode);
@@ -242,7 +243,7 @@ private:
 	uint32_t GetMaxEncodeWidth() const;
 	uint32_t GetMaxEncodeHeight() const;
 	NV_ENC_BUFFER_FORMAT GetPixelFormat() const;
-	DXGI_FORMAT GetD3D11Format(NV_ENC_BUFFER_FORMAT eBufferFormat) const;
+	DXGI_FORMAT GetD3D11Format(NV_ENC_BUFFER_FORMAT bufferFormat) const;
 
 private:
 	// =====================================================================
@@ -255,8 +256,9 @@ private:
 	void* m_encoderHandle = nullptr;
 	NV_ENCODE_API_FUNCTION_LIST m_nvenc = {};
 
+	// NVENC 에 그대로 넘기는 구조체. 앱이 준 원본은 m_userConfig 쪽이다.
 	NV_ENC_INITIALIZE_PARAMS m_initParameters = {};
-	NV_ENC_CONFIG m_config = {};
+	NV_ENC_CONFIG m_nvencConfig = {};
 
 	uint32_t m_width = 0;
 	uint32_t m_height = 0;
@@ -326,7 +328,7 @@ private:
 	// 읽기 위주 플래그
 	// =====================================================================
 	alignas(64) volatile LONG m_forceKeyFrame = FALSE;
-	volatile LONG m_acceptFrames = FALSE;
+	volatile LONG m_acceptingFrames = FALSE;
 	volatile LONG m_faulted = FALSE;
 	volatile LONG m_debugFailOutputCount = 0;
 

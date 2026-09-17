@@ -73,7 +73,7 @@ void EncodeCompletionThread::Run()
 			continue;
 		}
 
-		const NvEncCompletionResult result = encoder->CompleteOldestFrame(true, true);
+		const NvEncCompletionResult result = encoder->ProcessEncodeCompletion(true, true);
 		if (result == NvEncCompletionResult::Completed)
 		{
 			consecutiveLostFrames = 0;
@@ -100,7 +100,7 @@ void EncodeCompletionThread::Run()
 			break;
 		}
 
-		// Fatal. CompleteOldestFrame 안에서 이미 faulted 상태로 진입했다.
+		// Fatal. ProcessEncodeCompletion 안에서 이미 faulted 상태로 진입했다.
 		break;
 	}
 }

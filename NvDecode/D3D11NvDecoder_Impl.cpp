@@ -1252,10 +1252,21 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 		goto cleanup;
 	}
 
-	// 여기서 스트림을 동기화하지 않는다. 그러면 디코드 스레드가 매 프레임
-	// GPU 변환·복사가 끝날 때까지 놀게 된다. 대기는 프레임이 실제로 필요한
-	// AcquireFrame 으로 미뤄 두었고, 그 지점이 m_decodeCompleteEvents 를 기다린다.
-	// 이것이 이 디코더의 async 구조다 — 엔코더의 완료 이벤트와 같은 역할이다.
+	// 여기서 스트림을 동기화하지 않는다. 대기는 프레임이 실제로 필요한
+	// AcquireFrame 으로 넘기고, 그 지점이 m_decodeCompleteEvents 를 기다린다.
+	//
+	// 다만 그 대기가 실제로 겹쳐지지는 않는다. DecodeThread::Run 이 Parse
+	// 직후 같은 반복에서 AcquireFrame 을 부르므로, 방금 큐에 넣은 그 프레임을
+	// 곧바로 기다리게 된다. 미룬 거리는 사실상 0 이다.
+	//
+	// 그래도 이 모양이 맞다. 겹치게 하려면 드레인을 한 반복 뒤로 물려
+	// (N 을 파싱하면서 N-1 을 꺼내는 식) 프레임 하나만큼 늦게 내보내야 하는데,
+	// 그 대가가 60fps 에서 16.7ms 다. 아끼는 쪽은 QHD 변환 커널과
+	// device-to-device 복사라 1ms 안쪽이다. 저지연이 목적인 파이프라인에서
+	// 그 거래는 방향이 반대다.
+	//
+	// 그러니 이 비동기 구조가 버는 것은 처리량이 아니라, 스트림에 얹은
+	// 명령들 사이에서 CPU 가 불필요하게 블로킹하지 않는 것뿐이다.
 
 	// 페이로드를 먼저 쓰고 시퀀스를 올린다. InterlockedIncrement 가 full barrier 라
 	// 이 순서는 컴파일러도 CPU 도 뒤집지 못한다 — 소비자가 시퀀스를 본 시점에

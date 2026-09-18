@@ -1073,7 +1073,7 @@ int32_t D3D11NvDecoder_Impl::OnVideoSequence(CUVIDEOFORMAT* videoFormat)
 	if (!NVDEC_API_CALL(cuvidCreateDecoder(&m_decoderHandle, &decodeCreateInfo)))
 	{
 		m_videoFormatDesc = {};
-		ZeroMemory(&m_currentVideoFormat, sizeof(m_currentVideoFormat));
+		::ZeroMemory(&m_currentVideoFormat, sizeof(m_currentVideoFormat));
 		return 0;
 	}
 

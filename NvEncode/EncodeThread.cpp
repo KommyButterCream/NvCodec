@@ -61,7 +61,7 @@ bool EncodeThread::Initialize(EncodeFrameQueue* queue, D3D11NvEncoder_Impl* enco
 
 void EncodeThread::Shutdown()
 {
-	// 엔코딩 프레임 큐 부터 종료 알림
+	// 유입 큐부터 닫아 대기 중인 리더를 깨운다
 	if (m_inputQueue)
 	{
 		m_inputQueue->Shutdown();
@@ -145,8 +145,8 @@ void EncodeThread::Run()
 
 		if (forceKeyFrame)
 		{
-			// Keep the request pending even when this frame is dropped because all
-			// encoder slots are busy. EncodePicture consumes it on actual submission.
+			// 인코더 슬롯이 없어 이 프레임을 버리게 되더라도 요청은 남겨 둔다.
+			// 실제 제출 시점에 EncodePicture 가 소비한다.
 			m_encoder->RequestKeyFrame();
 		}
 
@@ -163,7 +163,7 @@ void EncodeThread::Run()
 
 		// 입력이 두 가지다.
 		//
-		//   texture 가 있으면 우리 디바이스의 텍스처다(예전 경로).
+		//   texture 가 있으면 우리 디바이스의 텍스처다(같은 디바이스 구성).
 		//   없으면 sourceSlotId 가 공유 풀의 슬롯 번호다.
 		//
 		// 후자가 캡처와 인코더가 서로 다른 D3D11 디바이스를 쓰는 구성이다.

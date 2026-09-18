@@ -1005,7 +1005,7 @@ void D3D11NvEncoder_Impl::DestroyBGRAToNV12Converter()
 
 bool D3D11NvEncoder_Impl::CreatePacketBuffers()
 {
-	// Encode 결과를 저장해줄 OutputFrame 생성
+	// Encode 결과를 담아 둘 슬롯별 패킷 버퍼 생성
 	// 버퍼 수량 만큼의 공간만 할당하고 실제 Encode Result 저장할 공간은
 	// Bitstream 을 읽어올 때 설정한다.
 	m_packetBuffers = new (std::nothrow) NvEncPacketBuffer[m_encodeSlotCount]{};
@@ -1014,7 +1014,7 @@ bool D3D11NvEncoder_Impl::CreatePacketBuffers()
 
 void D3D11NvEncoder_Impl::DestroyPacketBuffers()
 {
-	// Encode 결과를 저장해줄 OutputFrame 해제
+	// 슬롯별 패킷 버퍼 해제
 
 	if (!m_packetBuffers)
 	{
@@ -1059,7 +1059,7 @@ void D3D11NvEncoder_Impl::DestroyPendingFrames()
 
 bool D3D11NvEncoder_Impl::CreateEncodeCompletionThread()
 {
-	// 동기 이벤트는 CreatePipelineEvents 가 이미 만들어 두었다.
+	// 파이프라인 이벤트는 CreatePipelineEvents 가 이미 만들어 두었다.
 	// 여기서 만들면 스레드와 수명이 묶여 SubmitFrame 이 닫힌 핸들을 볼 수 있다.
 	if (!m_allSlotsFreeEvent || !m_frameSubmittedEvent)
 		return false;
@@ -1091,7 +1091,7 @@ void D3D11NvEncoder_Impl::DestroyEncodeCompletionThread()
 		m_encodeCompletionThread = nullptr;
 	}
 
-	// 동기 이벤트는 여기서 닫지 않는다. Destroy 끝에서 DestroyPipelineEvents 가 닫는다.
+	// 파이프라인 이벤트는 여기서 닫지 않는다. Destroy 끝에서 DestroyPipelineEvents 가 닫는다.
 }
 
 void D3D11NvEncoder_Impl::Destroy()
@@ -1120,7 +1120,8 @@ void D3D11NvEncoder_Impl::Destroy()
 	SetErrorCallback(nullptr, nullptr);
 
 	// Unregister / Unmap / DestroyEncoder 는 D3D11 리소스를 만진다.
-	// 앱의 렌더 스레드가 계속 돌고 있을 수 있으므로 게이트 안에서 처리한다.
+	// 같은 immediate context 를 쓰는 다른 주체가 돌고 있을 수 있으므로
+	// 게이트 안에서 처리한다.
 	// 완료 스레드는 위에서 이미 정지했다(게이트 밖에서 정지시켜야 한다.
 	// Flush 와 완료 스레드가 내부에서 게이트를 잡기 때문).
 	{
@@ -1137,7 +1138,7 @@ void D3D11NvEncoder_Impl::Destroy()
 		DestroyEncoder();
 	}
 
-	// 동기 이벤트는 위의 모든 스레드가 정지한 뒤에 닫는다.
+	// 파이프라인 이벤트는 위의 모든 스레드가 정지한 뒤에 닫는다.
 	DestroyPipelineEvents();
 
 	SafeRelease(m_D3D11Context);
@@ -1518,7 +1519,7 @@ bool D3D11NvEncoder_Impl::StageFrame(ID3D11Texture2D* bgraTexture)
 	return true;
 }
 
-// StageFrame 와 하는 일은 같다. 다른 점은 원본이 다른 디바이스가
+// StageFrame 과 하는 일은 같다. 다른 점은 원본이 다른 디바이스가
 // 만든 공유 텍스처라서 keyed mutex 를 잡아야 한다는 것뿐이다.
 //
 // 뮤텍스를 잡고 있는 구간은 CopyResource 하나다. 그게 끝나면 이 디바이스
@@ -1659,7 +1660,7 @@ bool D3D11NvEncoder_Impl::WaitForPendingFrames(uint32_t timeoutMilliseconds) con
 
 bool D3D11NvEncoder_Impl::MapInputResource(uint32_t slot)
 {
-	// EncodeFrame 가 호출 되기 전에 Input Resource Map 수행
+	// EncodePicture 가 호출되기 전에 Input Resource Map 수행
 	if (!m_registeredResources || !m_mappedInputBuffers || slot >= m_encodeSlotCount)
 		return false;
 
@@ -1682,7 +1683,7 @@ bool D3D11NvEncoder_Impl::MapInputResource(uint32_t slot)
 
 bool D3D11NvEncoder_Impl::UnmapInputResource(uint32_t slot)
 {
-	// EncodeFrame 완료된 후 Input Resource Unmap 수행
+	// EncodePicture 가 끝난 뒤 Input Resource Unmap 수행
 	if (!m_mappedInputBuffers || slot >= m_encodeSlotCount)
 		return false;
 
@@ -1726,7 +1727,6 @@ bool D3D11NvEncoder_Impl::EncodePicture(uint32_t slot)
 	picParams.bufferFmt = GetPixelFormat();
 	picParams.inputWidth = GetEncodeWidth();
 	picParams.inputHeight = GetEncodeHeight();
-	//picParams.inputPitch = GetEncodeWidth();
 	picParams.frameIdx = m_inputSequence;
 	picParams.outputBitstream = outputBuffer;
 	picParams.completionEvent = GetCompletionEvent(slot);
@@ -1738,8 +1738,8 @@ bool D3D11NvEncoder_Impl::EncodePicture(uint32_t slot)
 
 	NVENCSTATUS nvStatus = NV_ENC_ERR_GENERIC;
 	{
-		// NVENC may access the registered D3D11 resource and its immediate
-		// context internally while submitting the encode request.
+		// NVENC 가 제출 과정에서 등록된 D3D11 리소스와 immediate context 를
+		// 내부적으로 만질 수 있다.
 		D3D11ImmediateContextGuard contextGuard(m_contextGate);
 		nvStatus = m_nvenc.nvEncEncodePicture(m_encoderHandle, &picParams);
 	}
@@ -2081,7 +2081,8 @@ bool D3D11NvEncoder_Impl::RegisterResource(void* buffer, NV_ENC_INPUT_RESOURCE_T
 bool D3D11NvEncoder_Impl::RegisterInputResources(void** inputFrames, uint32_t inputFrameCount, NV_ENC_INPUT_RESOURCE_TYPE resourceType, uint32_t width, uint32_t height, uint32_t pitch, NV_ENC_BUFFER_FORMAT bufferFormat)
 {
 	// 외부의 D3D11 BGRA Texture 를 넘겨받아 NVENC 가 접근 가능하도록 리소스로 등록한다.
-	// inputFrames 는 프로그램 종료 시점까지 해제되지 않으며, 고정된 크기와 수량의 버퍼로 생성되어 있어야 한다.
+	// 등록한 텍스처는 Destroy 까지 살아 있어야 하고, 크기와 수량이 고정이어야 한다.
+	// (inputFrames 배열 자체는 void* 캐스팅용 임시라 호출자가 바로 해제한다)
 
 	if (!inputFrames || !m_registeredResources)
 	{

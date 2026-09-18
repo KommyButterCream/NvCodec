@@ -15,7 +15,7 @@ namespace
 	inline size_t WrapRingIndex(size_t index, size_t bufferCount)
 	{
 		// 버퍼 수량이 2의 n 승을 보장하므로
-		// Bit And 연산을 통해 Warp-Around.
+		// Bit And 연산을 통해 Wrap-Around.
 		// '%' 연산보다 속도가 빠르다.
 		return index & (bufferCount - 1);
 	}
@@ -193,7 +193,7 @@ bool DecodePacketQueue::EnqueuePacket(const InputPacket& packet)
 
 	// 데이터 저장을 위한 슬롯 ID 계산이 끝났으므로 (m_writePos)
 	// 해당 위치에 패킷 데이터를 저장한다.
-	// 이때, Encode Raw Data 를 슬롯 버퍼로 Deep-Copy 복사하여 저장한다.
+	// 이때, 인코딩된 비트스트림을 슬롯 버퍼로 Deep-Copy 하여 저장한다.
 	DecodePacketItem& item = m_items[m_writePos];
 	item.size = packet.size;
 	item.timestamp = packet.timestamp;

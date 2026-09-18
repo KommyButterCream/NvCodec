@@ -23,7 +23,7 @@ EncodeFrameQueue::~EncodeFrameQueue()
 bool EncodeFrameQueue::Initialize(uint32_t frameCount, ReleaseFrameCallback releaseCallback, void* userData)
 {
 	// 버퍼 수량이 2 의 n 승일 것임을 보장 해야 한다.
-	// 1 이면 HELD 슬롯이 있는 동안 빈 슬롯이 없어 모든 EnqueueFrame 가 실패한다.
+	// 1 이면 HELD 슬롯이 있는 동안 빈 슬롯이 없어 모든 EnqueueFrame 이 실패한다.
 	if (frameCount < kMinFrameCount || !IsPowerOfTwo(frameCount) || !releaseCallback)
 		return false;
 
@@ -127,7 +127,7 @@ void EncodeFrameQueue::FreeStorage_NoLock()
 
 bool EncodeFrameQueue::EnqueueFrame(const InputFrame& inputFrame, bool forceKeyFrame)
 {
-	// 외부에서 받아온 FrameHandle 을 참조하여 사용만 하고
+	// 외부에서 받아온 입력 프레임은 참조만 싣고(복사하지 않는다)
 	// ReleaseInputFrame 로 반환 해주어야 한다.
 
 	if (!m_items || !m_states)

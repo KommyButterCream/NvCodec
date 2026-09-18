@@ -540,7 +540,7 @@ void D3D11NvDecoder_Impl::WaitForAllSlotGpuWork()
 {
 	// cuEvent 로 모든 프레임이 Idle 상태인지 체크
 	// Decode 중 이라면 cuEventSynchronize 로 대기
-	// PictureDisplayCallback 호출 종료 시점에 Event Set.
+	// 이벤트는 OnPictureDisplay 가 스트림에 기록해 둔다.
 
 	ScopedCudaContext cudaContext(m_cudaContext);
 	if (!cudaContext.IsActive())
@@ -717,14 +717,14 @@ int32_t D3D11NvDecoder_Impl::ReconfigureForVideoFormat(CUVIDEOFORMAT* videoForma
 	if (!isDecodeResChange)
 	{
 		// Decoder 해상도가 변경되지 않은 경우라면
-		// VideoFormat 만 업데이트 하고 종료
+		// m_currentVideoFormat 만 갱신하고 종료
 		m_currentVideoFormat = *videoFormat;
 		return static_cast<int32_t>(SequenceResult::KeepSurfaceCount);
 	}
 
 
 	// 여기까지 온 경우라면 디코더 해상도가 변경된 경우
-	// 리소스를 해제할 예정이므로  현재 디코딩 중 인 모든 프레임의 디코딩이 종료될 때 까지 대기
+	// 리소스를 해제할 예정이므로 디코딩 중인 모든 프레임이 끝날 때까지 대기
 	WaitForAllSlotGpuWork();
 
 	ScopedCudaContext cudaContext(m_cudaContext);
@@ -1206,7 +1206,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	}
 	mappedGraphicsResource = true;
 
-	// Decode 결과는 NV12(YUC 4:2:0) 이므로 Cuda Kernel 로 BGRA 로 변환한다.
+	// Decode 결과는 NV12(YUV 4:2:0) 이므로 Cuda Kernel 로 BGRA 로 변환한다.
 	{
 		uint8_t* yPlane = reinterpret_cast<uint8_t*>(srcFrame);
 		uint8_t* uvPlane = yPlane + srcPitch * m_videoFormatDesc.lumaHeight;
@@ -1245,7 +1245,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 		goto cleanup;
 	}
 
-	// 해당 인덱스에 Decode 가 완료 이벤트 설정
+	// 이 슬롯의 GPU 작업이 끝났음을 표시할 이벤트를 스트림에 기록한다
 	if (!CUDA_DRVAPI_CALL(cuEventRecord(m_decodeCompleteEvents[slot], m_cudaStream)))
 	{
 		result = -1;

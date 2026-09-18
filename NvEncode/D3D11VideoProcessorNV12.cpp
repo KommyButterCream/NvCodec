@@ -20,7 +20,7 @@ bool D3D11VideoProcessorNV12::Initialize(
 	int32_t height,
 	ID3D11ImmediateContextGate* contextGate)
 {
-	// D3D11Texture BGRA 를 NV12 로 변환하는 DeD11VideoProcessor 를 초기화 한다.
+	// D3D11Texture BGRA 를 NV12 로 변환하는 D3D11VideoProcessor 를 초기화 한다.
 
 	if (!device || !context)
 		return false;

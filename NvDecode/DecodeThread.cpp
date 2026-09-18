@@ -38,7 +38,7 @@ bool DecodeThread::Initialize(DecodePacketQueue* queue, D3D11NvDecoder_Impl* dec
 
 void DecodeThread::Shutdown()
 {
-	// 디코딩 프레임 큐 부터 종료 알림
+	// 유입 큐부터 닫아 대기 중인 리더를 깨운다
 	if (m_inputQueue)
 	{
 		m_inputQueue->Shutdown();
@@ -84,7 +84,7 @@ void DecodeThread::Run()
 		if (!packetItem)
 		{
 			// 큐가 닫혔으면 정상 종료다.
-			// 그렇지 않다면 HELD 프레임이 남아있다는 뜻이고, 이는 프로그래밍 오류다.
+			// 그렇지 않다면 HELD 패킷이 남아있다는 뜻이고, 이는 프로그래밍 오류다.
 			if (m_inputQueue->IsRunning())
 			{
 				printf_s("[NVDEC ERROR] Decode thread stopping: the queue still holds a frame."

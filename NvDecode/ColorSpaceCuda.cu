@@ -35,11 +35,11 @@ __global__ void NV12ToBGRAKernel(
     int32_t G = Y - ((48 * U + 120 * V + 128) >> 8);
     int32_t B = Y + ((475 * U + 128) >> 8);
 
-    // 4. 결과 조립 (BGRA 순서 체크)
+    // 4. 결과 조립. dst 는 DXGI_FORMAT_B8G8R8A8_UNORM 이라 x=B, y=G, z=R, w=A 다.
     uchar4 out;
-    out.x = clampToByte(B); // Blue
-    out.y = clampToByte(G); // Green
-    out.z = clampToByte(R); // Red
+    out.x = clampToByte(B);
+    out.y = clampToByte(G);
+    out.z = clampToByte(R);
     out.w = 255;
 
     // 5. 메모리 쓰기 (Pitch 단위 안전 쓰기)

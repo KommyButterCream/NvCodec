@@ -1366,6 +1366,9 @@ bool D3D11NvEncoder_Impl::StartEncodeThread()
 		return false;
 	}
 
+	// 워커가 생기기 전에 걸어 둔 콜백을 이제 넘긴다.
+	m_encodeThread->SetKeyFrameRequestCallback(m_keyFrameRequestCallback, m_keyFrameRequestUserData);
+
 	return true;
 }
 
@@ -1463,6 +1466,16 @@ void D3D11NvEncoder_Impl::SetErrorCallback(ErrorCallback callback, void* userDat
 
 void D3D11NvEncoder_Impl::SetKeyFrameRequestCallback(bool (*callback)(void*), void* userData)
 {
+	// 워커가 아직 없어도 기억해 둔다.
+	//
+	// 앱은 Initialize 직후 콜백을 걸고 StartEncodeThread 를 나중에 부른다.
+	// 예전에는 m_encodeThread 가 nullptr 이면 그냥 버렸고, 그래서 IDR 강제가
+	// 영영 동작하지 않았다. 세션의 첫 프레임은 어차피 IDR 이라 처음 붙은
+	// 뷰어만 화면을 받았고, 그 뒤에 붙는 뷰어는 오지 않는 키프레임을
+	// 기다렸다. 디코더 쪽은 m_frameCallback 을 같은 이유로 들고 있다.
+	m_keyFrameRequestCallback = callback;
+	m_keyFrameRequestUserData = userData;
+
 	if (m_encodeThread)
 	{
 		m_encodeThread->SetKeyFrameRequestCallback(callback, userData);

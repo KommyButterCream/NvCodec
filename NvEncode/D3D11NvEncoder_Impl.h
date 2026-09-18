@@ -335,6 +335,11 @@ private:
 	NvEncFrameReleaseCallback m_frameReleaseCallback = nullptr;
 	void* m_frameReleaseUserData = nullptr;
 
+	// StartEncodeThread 이전에 SetKeyFrameRequestCallback 이 불릴 수 있다.
+	// 앱은 인코더를 만든 직후 콜백을 걸고, 워커는 그 뒤에 시작한다.
+	bool (*m_keyFrameRequestCallback)(void*) = nullptr;
+	void* m_keyFrameRequestUserData = nullptr;
+
 	// =====================================================================
 	// 콜백 / 설정
 	// =====================================================================

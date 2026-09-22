@@ -1,0 +1,1583 @@
+﻿<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NvCodec</title>
+<style>
+:root{
+  --ink:#131a22; --ink-2:#48566a; --ink-3:#7b8798;
+  --paper:#f7f9fc; --paper-2:#edf2f8; --paper-3:#e2e9f2;
+  --rule:#d3dce8; --rule-2:#b7c3d4;
+  --signal:#2a6099; --signal-2:#1c4573; --signal-soft:#e8f0f9;
+  --ok:#2f6b5e; --warn:#8a6420; --bad:#a34038;
+  --mono:"Cascadia Mono","JetBrains Mono","Consolas","D2Coding",ui-monospace,monospace;
+  --sans:"Pretendard","Pretendard Variable","Segoe UI Variable Text","Segoe UI",
+         -apple-system,"Malgun Gothic",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ink:#dde5ef; --ink-2:#9caaba; --ink-3:#6d7b8c;
+    --paper:#0e1319; --paper-2:#151d26; --paper-3:#1d2630;
+    --rule:#27313d; --rule-2:#374553;
+    --signal:#6aa6de; --signal-2:#8dc0ef; --signal-soft:#122234;
+    --ok:#6cae9d; --warn:#c6a04e; --bad:#df8a80;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#dde5ef; --ink-2:#9caaba; --ink-3:#6d7b8c;
+  --paper:#0e1319; --paper-2:#151d26; --paper-3:#1d2630;
+  --rule:#27313d; --rule-2:#374553;
+  --signal:#6aa6de; --signal-2:#8dc0ef; --signal-soft:#122234;
+  --ok:#6cae9d; --warn:#c6a04e; --bad:#df8a80;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--sans); font-size:16px; line-height:1.75;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:0 20px}
+
+header.top{border-bottom:1px solid var(--rule); background:var(--paper-2)}
+.top .wrap{padding-block:52px 40px}
+.eyebrow{font-family:var(--mono); font-size:11.5px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--signal); margin:0 0 14px}
+h1{margin:0; font-size:clamp(30px,5.2vw,50px); line-height:1.1;
+  letter-spacing:-.02em; font-weight:660; text-wrap:balance}
+.tagline{margin:16px 0 0; max-width:64ch; font-size:17px; color:var(--ink-2); text-wrap:pretty}
+.chips{display:flex; flex-wrap:wrap; gap:7px; margin-top:26px; padding:0; list-style:none}
+.chips li{font-family:var(--mono); font-size:11.5px; letter-spacing:.03em;
+  border:1px solid var(--rule-2); border-radius:2px; padding:3px 9px;
+  color:var(--ink-2); background:var(--paper)}
+
+.shell{display:grid; grid-template-columns:210px minmax(0,1fr); gap:56px; align-items:start}
+nav.toc{position:sticky; top:24px; padding-block:48px 24px; font-size:13.5px}
+nav.toc ol{list-style:none; margin:0; padding:0; counter-reset:toc}
+nav.toc li{counter-increment:toc; margin:0 0 3px}
+nav.toc a{display:grid; grid-template-columns:22px 1fr; gap:6px;
+  color:var(--ink-3); text-decoration:none; padding:3px 0; line-height:1.45}
+nav.toc a::before{content:counter(toc,decimal-leading-zero); font-family:var(--mono);
+  font-size:10.5px; color:var(--rule-2); padding-top:3px}
+nav.toc a:hover{color:var(--signal)}
+main{padding-block:48px 100px; min-width:0}
+
+section{margin:0 0 68px; scroll-margin-top:20px}
+h2{margin:0 0 6px; font-size:25px; letter-spacing:-.015em; font-weight:640;
+  line-height:1.25; text-wrap:balance}
+.sub{margin:0 0 26px; color:var(--ink-3); font-size:14.5px; max-width:68ch}
+h3{margin:34px 0 10px; font-size:17.5px; font-weight:640; letter-spacing:-.01em}
+h4{margin:24px 0 6px; font-size:14px; font-weight:660; color:var(--ink-2);
+  font-family:var(--mono); letter-spacing:.02em}
+p{margin:0 0 14px; max-width:70ch; text-wrap:pretty}
+ul,ol{margin:0 0 14px; padding-left:20px; max-width:70ch}
+li{margin:0 0 6px}
+strong{font-weight:660}
+code{font-family:var(--mono); font-size:.885em; background:var(--paper-3);
+  padding:1px 5px; border-radius:2px; word-break:break-word}
+a{color:var(--signal)}
+
+.facts{display:grid; grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+  gap:1px; background:var(--rule); border:1px solid var(--rule); margin:0 0 28px}
+.facts div{background:var(--paper); padding:16px 18px}
+.facts dt{font-family:var(--mono); font-size:10.5px; letter-spacing:.11em;
+  text-transform:uppercase; color:var(--ink-3); margin:0 0 6px}
+.facts dd{margin:0; font-size:20px; font-weight:640; letter-spacing:-.01em;
+  font-variant-numeric:tabular-nums}
+.facts dd small{display:block; font-size:12px; font-weight:400; color:var(--ink-3);
+  letter-spacing:0; margin-top:3px; line-height:1.5}
+
+.note{border-left:2px solid var(--signal); background:var(--signal-soft);
+  padding:14px 18px; margin:20px 0; max-width:70ch}
+.note p{margin:0 0 8px} .note p:last-child{margin:0}
+.note .lbl{font-family:var(--mono); font-size:10.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--signal-2); display:block; margin-bottom:5px}
+
+pre{margin:16px 0; padding:15px 17px; overflow-x:auto;
+  background:var(--paper-2); border:1px solid var(--rule);
+  font-family:var(--mono); font-size:12.5px; line-height:1.68; color:var(--ink-2); tab-size:4}
+pre b{color:var(--ink); font-weight:600}
+pre i{color:var(--ink-3); font-style:normal}
+pre em{color:var(--signal); font-style:normal; font-weight:600}
+.cap{font-size:12.5px; color:var(--ink-3); margin:-8px 0 20px; font-family:var(--mono)}
+
+.tw{overflow-x:auto; margin:18px 0 22px; border:1px solid var(--rule)}
+table{border-collapse:collapse; width:100%; font-size:13.5px; min-width:560px}
+th,td{text-align:left; padding:9px 13px; border-bottom:1px solid var(--rule); vertical-align:top}
+thead th{background:var(--paper-2); font-family:var(--mono); font-size:10.5px;
+  letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3);
+  font-weight:500; white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+td code{background:transparent; padding:0; font-size:12.5px}
+.num{font-variant-numeric:tabular-nums; white-space:nowrap; text-align:right}
+th.num{text-align:right}
+
+ol.steps{list-style:none; padding:0; counter-reset:s; max-width:76ch}
+ol.steps>li{counter-increment:s; position:relative; padding:0 0 16px 40px;
+  border-left:1px solid var(--rule); margin:0 0 0 11px}
+ol.steps>li:last-child{border-left-color:transparent; padding-bottom:0}
+ol.steps>li::before{content:counter(s); position:absolute; left:-11px; top:0;
+  width:22px; height:22px; border-radius:50%; background:var(--paper);
+  border:1px solid var(--rule-2); color:var(--ink-3);
+  font-family:var(--mono); font-size:11px; display:grid; place-items:center}
+ol.steps>li b{display:block; margin-bottom:2px; font-weight:640}
+ol.steps>li p{margin:0; font-size:14.5px; color:var(--ink-2)}
+
+.opt{display:grid; gap:1px; background:var(--rule); border:1px solid var(--rule); margin:22px 0}
+.opt article{background:var(--paper); padding:18px 20px}
+.opt h4{margin:0 0 4px; font-family:var(--sans); font-size:16px; color:var(--ink);
+  letter-spacing:-.01em; font-weight:640}
+.opt .where{font-family:var(--mono); font-size:11px; color:var(--ink-3); margin:0 0 10px}
+.opt p{margin:0 0 9px; font-size:14.5px; max-width:none}
+.opt p:last-child{margin:0}
+.gain{display:inline-block; font-family:var(--mono); font-size:11.5px;
+  color:var(--signal-2); border:1px solid var(--signal); background:var(--signal-soft);
+  padding:1px 7px; border-radius:2px; margin-top:4px}
+
+figure{margin:22px 0; padding:0}
+figure svg{display:block; width:100%; height:auto; max-width:100%}
+figcaption{font-size:12.5px; color:var(--ink-3); margin-top:8px; font-family:var(--mono)}
+.svgbox{border:1px solid var(--rule); background:var(--paper-2); padding:18px 16px; overflow-x:auto}
+
+.tag{font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:2px; white-space:nowrap}
+.t-ok{color:var(--ok); border:1px solid currentColor}
+.t-warn{color:var(--warn); border:1px solid currentColor}
+.t-bad{color:var(--bad); border:1px solid currentColor}
+footer{border-top:1px solid var(--rule); background:var(--paper-2)}
+footer .wrap{padding-block:26px 40px; font-size:13px; color:var(--ink-3)}
+
+/* ---------- before/after bar chart ---------- */
+.chart{border:1px solid var(--rule); background:var(--paper); padding:16px 18px; margin:18px 0}
+.chart + .chart{margin-top:-1px}
+.chart-h{font-size:14.5px; font-weight:640; color:var(--ink); margin:0 0 3px; letter-spacing:-.01em}
+.chart-h span{font-family:var(--mono); font-size:11px; font-weight:400; color:var(--ink-3); margin-left:7px; letter-spacing:0}
+.chart-note{font-size:12.5px; color:var(--ink-3); margin:0 0 13px; max-width:none}
+.crow{display:grid; grid-template-columns:minmax(118px,196px) 1fr 86px; gap:12px; align-items:center; margin:0 0 7px}
+.crow:last-of-type{margin-bottom:0}
+.crow .lbl{font-size:12.5px; color:var(--ink-2); line-height:1.35}
+.crow .lbl em{font-style:normal; font-family:var(--mono); font-size:11px; color:var(--ink-3)}
+.crow .track{background:var(--paper-3); height:19px; border:1px solid var(--rule); position:relative}
+.crow .bar{height:100%; display:block}
+.bar.before{background:var(--rule-2)}
+.bar.after{background:var(--signal)}
+.crow .val{font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums;
+  color:var(--ink); text-align:right; white-space:nowrap}
+.crow.win .val{color:var(--signal-2); font-weight:600}
+.delta{margin-top:11px; padding-top:10px; border-top:1px solid var(--rule);
+  font-family:var(--mono); font-size:12px; color:var(--signal-2); line-height:1.6}
+.delta b{color:var(--ink); font-weight:600}
+@media (max-width:620px){
+  .crow{grid-template-columns:1fr; gap:3px}
+  .crow .val{text-align:left}
+}
+
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr; gap:0}
+  nav.toc{position:static; padding-block:32px 0; border-bottom:1px solid var(--rule)}
+  nav.toc ol{columns:2; column-gap:24px}
+  main{padding-block:32px 64px}
+}
+@media (max-width:520px){
+  nav.toc ol{columns:1}
+  .top .wrap{padding-block:36px 28px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">NVIDIA Video Codec SDK · H.264 · Low-latency DLL</p>
+    <h1>NvCodec</h1>
+    <p class="tagline">
+      D3D11 텍스처를 그대로 받아 H.264 로 인코딩하고, 비트스트림을 다시 D3D11 텍스처로
+      되돌리는 저지연 코덱 모듈. 인코더와 디코더가 한 쌍이고, 지연의 원인을
+      추측이 아니라 <strong>측정으로</strong> 분해했다.
+    </p>
+    <ul class="chips">
+      <li>C++20</li><li>NVENC</li><li>NVDEC / CUVID</li><li>CUDA 12.8</li>
+      <li>Direct3D 11</li><li>Video Codec SDK 13.0.37</li>
+      <li>Async completion</li><li>Intra refresh</li><li>x64 DLL</li>
+    </ul>
+  </div>
+</header>
+
+<div class="wrap shell">
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">한눈에</a></li>
+    <li><a href="#s2">모듈의 범위</a></li>
+    <li><a href="#s2b">코드 구조</a></li>
+    <li><a href="#s3">전체 처리 파이프라인</a></li>
+    <li><a href="#s4b">동시성 모델</a></li>
+    <li><a href="#s4">인코더 파이프라인</a></li>
+    <li><a href="#s5">슬롯 링과 두 스레드</a></li>
+    <li><a href="#s6">디코더 파이프라인</a></li>
+    <li><a href="#s7">지연의 구조</a></li>
+    <li><a href="#s8">최적화 기법</a></li>
+    <li><a href="#s8b">개선 전후</a></li>
+    <li><a href="#s9">예외와 장애 처리</a></li>
+    <li><a href="#s10">검증과 관측성</a></li>
+    <li><a href="#s11">트레이드오프와 한계</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- ============================= 1 ============================= -->
+<section id="s1">
+  <h2>한눈에</h2>
+  <p class="sub">RTX 5080 · Release · 1080p 실측. 전부 <code>NvEncodeBench</code> 하네스로 잰 값이다.</p>
+
+  <dl class="facts">
+    <div><dt>인코드 처리량</dt><dd>741 fps<small>async 깊이 2, 포화 상태 (sync 604)</small></dd></div>
+    <div><dt>실동작 지연</dt><dd>3.7 ms<small>60 fps 투입, 큐 → 콜백 p50</small></dd></div>
+    <div><dt>지연 하한</dt><dd>1.6 ms<small>모든 투입 속도에서 동일한 min</small></dd></div>
+    <div><dt>프레임 크기 균일도</dt><dd>1.13×<small>max/mean · 튜닝 전 4.62×</small></dd></div>
+    <div><dt>콜백 예산</dt><dd>14 ms<small>이만큼 태워도 처리량·드롭 무영향</small></dd></div>
+    <div><dt>회귀 케이스</dt><dd>18 건<small>전부 실제 GPU 인코딩을 거친다</small></dd></div>
+    <div><dt>원자 읽기 비용</dt><dd>0.76 cyc<small>CAS 관용구 대비 19.6배 · 같은 머신 실측</small></dd></div>
+  </dl>
+
+  <p>
+    이 모듈은 원격 데스크톱 스트리밍의 코덱 계층이다. 서버에서 캡처한 D3D11 텍스처를
+    H.264 로 인코딩하고, 클라이언트에서 그 비트스트림을 다시 D3D11 텍스처로 되돌린다.
+    양쪽 모두 <strong>GPU 메모리를 벗어나지 않는다</strong> — 시스템 메모리로 내려오는 지점은 인코딩된
+    비트스트림 하나뿐이다.
+  </p>
+  <p>
+    설계에서 가장 많이 다룬 주제는 <strong>지연이 어디서 생기는가</strong>였다.
+    "버퍼를 늘리면 안전하다" 같은 직관이 측정과 반대로 나오는 경우가 여러 번 있었고,
+    그때마다 하네스를 먼저 만들고 숫자를 본 뒤에 코드를 고쳤다.
+  </p>
+</section>
+
+<!-- ============================= 2 ============================= -->
+<section id="s2">
+  <h2>모듈의 범위</h2>
+  <p class="sub">무엇을 직접 만들었고, SDK 가 무엇을 해주는가.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>구성</th><th>역할</th><th>핵심 파일</th></tr></thead>
+      <tbody>
+        <tr><td><strong>D3D11NvEncoder</strong></td><td>BGRA 텍스처 → H.264 비트스트림. 슬롯 링, 비동기 완료, 런타임 재설정</td><td><code>D3D11NvEncoder_Impl.cpp</code> (2.3k 줄)</td></tr>
+        <tr><td><strong>D3D11NvDecoder</strong></td><td>H.264 비트스트림 → BGRA 텍스처. 파서 콜백, CUDA interop, 출력 슬롯 링</td><td><code>D3D11NvDecoder_Impl.cpp</code> (1.5k 줄)</td></tr>
+        <tr><td>D3D11VideoProcessorNV12</td><td>BGRA → NV12 색공간 변환 (GPU 고정 기능)</td><td><code>D3D11VideoProcessorNV12.cpp</code></td></tr>
+        <tr><td>EncodeThread / EncodeCompletionThread</td><td>제출 측 / 회수 측 워커</td><td><code>Encode*Thread.cpp</code></td></tr>
+        <tr><td>EncodeFrameQueue / DecodePacketQueue</td><td>유입 큐. 앞은 참조 전달(latest-only), 뒤는 복사</td><td><code>*Queue.cpp</code></td></tr>
+        <tr><td>NvEncodeBench</td><td>회귀 18케이스 + 처리량/지연/왕복 측정</td><td><code>NvEncodeBench/</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>SDK 를 그대로 쓰지 않은 이유</h3>
+  <p>
+    Video Codec SDK 는 <code>NvEncoderD3D11</code> 같은 래퍼를 제공하지만, 이 파이프라인이 필요로 하는
+    세 가지가 없다. <strong>비동기 완료 이벤트 기반의 슬롯 회수</strong>,
+    <strong>인코딩을 멈추지 않는 런타임 비트레이트 변경</strong>,
+    <strong>다른 디바이스가 만든 공유 텍스처를 입력으로 받는 경로</strong>.
+    그래서 <code>nvEncodeAPI</code> 를 직접 호출하는 구현을 따로 썼다.
+  </p>
+</section>
+
+<!-- ============================= NEW: 코드 구조 ============================= -->
+<section id="s2b">
+  <h2>코드 구조</h2>
+  <p class="sub">인코더 6 클래스, 디코더 4 클래스. 스레드를 누가 소유하는지가 배치의 기준이다.</p>
+
+  <figure>
+    <div class="svgbox">
+      <svg viewBox="0 0 940 560" role="img" aria-label="인코더와 디코더의 클래스 구조 블록 다이어그램. 공개 헤더, 구현 클래스, 워커 스레드, 큐, SDK 계층으로 나뉜다">
+        <defs>
+          <marker id="na" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-3)"/></marker>
+          <marker id="ns" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--signal)"/></marker>
+        </defs>
+        <g font-family="var(--mono)" font-size="11" fill="var(--ink-2)">
+
+          <!-- ENCODER -->
+          <text x="14" y="24" fill="var(--signal)" font-size="10.5" letter-spacing="1.3">ENCODER</text>
+          <rect x="10" y="32" width="452" height="246" fill="none" stroke="var(--rule-2)" stroke-dasharray="4 3"/>
+
+          <rect x="24" y="46" width="200" height="50" fill="var(--paper)" stroke="var(--signal)"/>
+          <text x="124" y="66" text-anchor="middle" fill="var(--ink)" font-size="12.5">D3D11NvEncoder</text>
+          <text x="124" y="84" text-anchor="middle" font-size="10">공개 표면 · pimpl 한 겹</text>
+
+          <rect x="248" y="46" width="200" height="50" fill="var(--paper-3)" stroke="var(--rule-2)"/>
+          <text x="348" y="66" text-anchor="middle" fill="var(--ink)" font-size="12.5">NvEncConfig / NvEncPacket</text>
+          <text x="348" y="84" text-anchor="middle" font-size="10">[init] / [runtime] 구분</text>
+
+          <rect x="24" y="110" width="424" height="66" fill="var(--paper)" stroke="var(--signal)"/>
+          <text x="236" y="130" text-anchor="middle" fill="var(--ink)" font-size="12.5">D3D11NvEncoder_Impl — 슬롯 링 · 상태 · nvEncodeAPI 호출 전부</text>
+          <text x="36" y="150">StageFrame / SubmitFrame</text>
+          <text x="236" y="150">ProcessEncodeCompletion</text>
+          <text x="36" y="166">Reconfigure</text>
+          <text x="236" y="166">EnterFaultedState</text>
+
+          <rect x="24" y="190" width="132" height="74" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="90" y="210" text-anchor="middle" fill="var(--ink)" font-size="12">EncodeThread</text>
+          <text x="90" y="228" text-anchor="middle" font-size="10">큐 → Stage → Submit</text>
+          <text x="90" y="246" text-anchor="middle" font-size="10" fill="var(--ink-3)">제출 측</text>
+
+          <rect x="170" y="190" width="132" height="74" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="236" y="210" text-anchor="middle" fill="var(--ink)" font-size="12">EncodeCompletion</text>
+          <text x="236" y="226" text-anchor="middle" fill="var(--ink)" font-size="12">Thread</text>
+          <text x="236" y="246" text-anchor="middle" font-size="10" fill="var(--ink-3)">회수 측</text>
+
+          <rect x="316" y="190" width="132" height="74" fill="var(--signal-soft)" stroke="var(--signal)"/>
+          <text x="382" y="210" text-anchor="middle" fill="var(--ink)" font-size="12">EncodeFrameQueue</text>
+          <text x="382" y="228" text-anchor="middle" font-size="10">latest-only</text>
+          <text x="382" y="246" text-anchor="middle" font-size="10" fill="var(--ink-3)">SRWLOCK + CV</text>
+
+          <line x1="124" y1="98" x2="124" y2="106" stroke="var(--signal)" marker-end="url(#ns)"/>
+          <line x1="90" y1="180" x2="90" y2="186" stroke="var(--ink-3)" marker-end="url(#na)"/>
+          <line x1="236" y1="180" x2="236" y2="186" stroke="var(--ink-3)" marker-end="url(#na)"/>
+          <line x1="316" y1="222" x2="306" y2="222" stroke="var(--signal)" marker-end="url(#ns)"/>
+
+          <!-- DECODER -->
+          <text x="490" y="24" fill="var(--signal)" font-size="10.5" letter-spacing="1.3">DECODER</text>
+          <rect x="486" y="32" width="444" height="246" fill="none" stroke="var(--rule-2)" stroke-dasharray="4 3"/>
+
+          <rect x="500" y="46" width="200" height="50" fill="var(--paper)" stroke="var(--signal)"/>
+          <text x="600" y="66" text-anchor="middle" fill="var(--ink)" font-size="12.5">D3D11NvDecoder</text>
+          <text x="600" y="84" text-anchor="middle" font-size="10">공개 표면 · pimpl 한 겹</text>
+
+          <rect x="716" y="46" width="200" height="50" fill="var(--paper-3)" stroke="var(--rule-2)"/>
+          <text x="816" y="66" text-anchor="middle" fill="var(--ink)" font-size="12.5">NvDecConfig / NvDecPacket</text>
+          <text x="816" y="84" text-anchor="middle" font-size="10">전부 초기화 시점 고정</text>
+
+          <rect x="500" y="110" width="416" height="66" fill="var(--paper)" stroke="var(--signal)"/>
+          <text x="708" y="130" text-anchor="middle" fill="var(--ink)" font-size="12.5">D3D11NvDecoder_Impl — 파서 콜백 3종 · CUDA interop · 출력 링</text>
+          <text x="512" y="150">Parse → cuvidParseVideoData</text>
+          <text x="712" y="150">OnPictureDisplay</text>
+          <text x="512" y="166">AcquireFrame / ReleaseFrame</text>
+          <text x="712" y="166">ReconfigureForVideoFormat</text>
+
+          <rect x="500" y="190" width="132" height="74" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="566" y="210" text-anchor="middle" fill="var(--ink)" font-size="12">DecodeThread</text>
+          <text x="566" y="228" text-anchor="middle" font-size="10">큐 → Parse → 드레인</text>
+          <text x="566" y="246" text-anchor="middle" font-size="10" fill="var(--ink-3)">스레드 하나뿐</text>
+
+          <rect x="646" y="190" width="132" height="74" fill="var(--signal-soft)" stroke="var(--signal)"/>
+          <text x="712" y="210" text-anchor="middle" fill="var(--ink)" font-size="12">DecodePacketQueue</text>
+          <text x="712" y="228" text-anchor="middle" font-size="10">버퍼로 복사</text>
+          <text x="712" y="246" text-anchor="middle" font-size="10" fill="var(--ink-3)">SRWLOCK + CV</text>
+
+          <rect x="792" y="190" width="124" height="74" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="854" y="210" text-anchor="middle" fill="var(--ink)" font-size="12">출력 슬롯 ×8</text>
+          <text x="854" y="228" text-anchor="middle" font-size="10">texture + CUevent</text>
+          <text x="854" y="246" text-anchor="middle" font-size="10" fill="var(--ink-3)">slotHeldByApp[]</text>
+
+          <line x1="600" y1="98" x2="600" y2="106" stroke="var(--signal)" marker-end="url(#ns)"/>
+          <line x1="566" y1="180" x2="566" y2="186" stroke="var(--ink-3)" marker-end="url(#na)"/>
+          <line x1="646" y1="222" x2="636" y2="222" stroke="var(--signal)" marker-end="url(#ns)"/>
+          <line x1="786" y1="222" x2="792" y2="222" stroke="var(--signal)" marker-end="url(#ns)"/>
+
+          <!-- shared -->
+          <rect x="10" y="300" width="452" height="60" fill="var(--paper-2)" stroke="var(--rule-2)"/>
+          <text x="236" y="322" text-anchor="middle" fill="var(--ink)" font-size="12.5">D3D11VideoProcessorNV12</text>
+          <text x="236" y="342" text-anchor="middle">BGRA → NV12 · BT.709 full range · GPU 고정 기능</text>
+
+          <rect x="486" y="300" width="444" height="60" fill="var(--paper-2)" stroke="var(--rule-2)"/>
+          <text x="708" y="322" text-anchor="middle" fill="var(--ink)" font-size="12.5">ConvertNV12ToBGRA (CUDA 커널)</text>
+          <text x="708" y="342" text-anchor="middle">NV12 → BGRA · 디코더는 VideoProcessor 대신 커널을 쓴다</text>
+
+          <rect x="10" y="378" width="920" height="60" fill="var(--paper-2)" stroke="var(--rule-2)"/>
+          <text x="470" y="400" text-anchor="middle" fill="var(--ink)" font-size="12.5">NVIDIA Video Codec SDK 13.0.37 · CUDA 12.8 · Direct3D 11</text>
+          <text x="470" y="420" text-anchor="middle">nvEncodeAPI (직접 호출) · cuvid 파서 / 디코더 · ID3D11ImmediateContextGate</text>
+
+          <line x1="236" y1="270" x2="236" y2="296" stroke="var(--ink-3)" marker-end="url(#na)"/>
+          <line x1="708" y1="270" x2="708" y2="296" stroke="var(--ink-3)" marker-end="url(#na)"/>
+          <line x1="236" y1="364" x2="236" y2="374" stroke="var(--ink-3)" marker-end="url(#na)"/>
+          <line x1="708" y1="364" x2="708" y2="374" stroke="var(--ink-3)" marker-end="url(#na)"/>
+
+          <text x="14" y="470" fill="var(--ink-3)" font-size="10.5">인코더는 스레드가 둘(제출/회수), 디코더는 하나 — 파서가 콜백을 같은 스레드에서 동기로 부르기 때문이다.</text>
+          <text x="14" y="490" fill="var(--ink-3)" font-size="10.5">SDK 래퍼(NvEncoderD3D11 등)는 쓰지 않는다. 비동기 완료 · 런타임 재설정 · 공유 텍스처 입력이 전부 없어서다.</text>
+          <text x="14" y="510" fill="var(--ink-3)" font-size="10.5">파란 화살표 = 프레임/패킷이 흐르는 경로 · 회색 = 소유 또는 호출 의존</text>
+          <text x="14" y="536" fill="var(--ink-3)" font-size="10.5">두 워커 모두 Impl 을 소유하지 않는다. Impl 이 워커를 만들고 지우므로 Destroy 한 번으로 종료 순서가 정해진다.</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>그림 1 — 인코더와 디코더는 대칭이 아니다. 스레드 수가 다른 이유가 파서 콜백 모델에 있다.</figcaption>
+  </figure>
+
+  <h3>pimpl 한 겹을 둔 이유</h3>
+  <p>
+    <code>D3D11NvEncoder</code> / <code>D3D11NvDecoder</code> 는 <strong>거의 전달만 한다.</strong>
+    실제 구현은 <code>_Impl</code> 에 있다. DLL 경계를 넘는 헤더에 <code>nvEncodeAPI.h</code> 나
+    CUDA 헤더가 새어 나가지 않게 하려는 것이 첫째 이유고,
+    둘째는 <strong>SDK 버전을 올릴 때 사용자 쪽 재컴파일을 강제하지 않기 위해서</strong>다.
+  </p>
+
+  <h3>인코더는 스레드가 둘, 디코더는 하나</h3>
+  <p>
+    대칭으로 만들 수 있었는데 그러지 않았다. <strong>NVDEC 파서가 콜백을
+    <code>cuvidParseVideoData</code> 안에서 동기로 부르기 때문</strong>이다 —
+    디코딩 결과가 나오는 시점이 이미 파서 호출 스레드에 묶여 있어서, 회수 스레드를 따로 두면
+    할 일이 없다.
+  </p>
+  <p>
+    반대로 NVENC 는 <code>nvEncEncodePicture</code> 가 <strong>즉시 반환</strong>하고 완료를 이벤트로 알린다.
+    그래서 제출과 회수를 나눌 수 있고, 나눠야 제출이 GPU 를 기다리지 않는다.
+    <strong>구조가 다른 것은 SDK 의 모델이 다르기 때문이지 설계 취향이 아니다.</strong>
+  </p>
+</section>
+
+<!-- ============================= 3 ============================= -->
+<section id="s3">
+  <h2>전체 처리 파이프라인</h2>
+  <p class="sub">화면 한 장이 서버 GPU 에서 클라이언트 화면까지 가는 길.</p>
+
+  <figure>
+    <div class="svgbox">
+      <svg viewBox="0 0 980 420" role="img" aria-label="캡처부터 표시까지의 전체 파이프라인. 서버에서 캡처, 공유 텍스처, NV12 변환, NVENC 인코딩, 네트워크 전송을 거쳐 클라이언트에서 NVDEC 디코딩, CUDA 변환, 표시로 이어진다">
+        <defs>
+          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-3)"/></marker>
+          <marker id="as" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--signal)"/></marker>
+        </defs>
+        <g font-family="var(--mono)" font-size="11" fill="var(--ink-2)">
+
+          <text x="14" y="26" fill="var(--signal)" font-size="10.5" letter-spacing="1.4">SERVER · GPU MEMORY</text>
+          <rect x="10" y="36" width="516" height="120" fill="none" stroke="var(--rule-2)" stroke-dasharray="4 3"/>
+
+          <rect x="24" y="58" width="104" height="44" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="76" y="78" text-anchor="middle" fill="var(--ink)">Desktop</text>
+          <text x="76" y="93" text-anchor="middle">Duplication</text>
+
+          <rect x="152" y="58" width="104" height="44" fill="var(--paper)" stroke="var(--signal)"/>
+          <text x="204" y="78" text-anchor="middle" fill="var(--ink)">공유 풀</text>
+          <text x="204" y="93" text-anchor="middle">BGRA ×4</text>
+
+          <rect x="280" y="58" width="104" height="44" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="332" y="78" text-anchor="middle" fill="var(--ink)">NV12 변환</text>
+          <text x="332" y="93" text-anchor="middle">VideoProcessor</text>
+
+          <rect x="408" y="58" width="104" height="44" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="460" y="78" text-anchor="middle" fill="var(--ink)">NVENC</text>
+          <text x="460" y="93" text-anchor="middle">H.264</text>
+
+          <text x="204" y="128" text-anchor="middle" fill="var(--ink-3)" font-size="10">디바이스 경계</text>
+          <text x="204" y="142" text-anchor="middle" fill="var(--ink-3)" font-size="10">keyed mutex</text>
+          <text x="460" y="128" text-anchor="middle" fill="var(--ink-3)" font-size="10">슬롯 링 + 완료 이벤트</text>
+
+          <line x1="130" y1="80" x2="148" y2="80" stroke="var(--ink-3)" marker-end="url(#a)"/>
+          <line x1="258" y1="80" x2="276" y2="80" stroke="var(--signal)" marker-end="url(#as)"/>
+          <line x1="386" y1="80" x2="404" y2="80" stroke="var(--ink-3)" marker-end="url(#a)"/>
+
+          <!-- network -->
+          <rect x="556" y="58" width="112" height="44" fill="var(--paper-3)" stroke="var(--rule-2)"/>
+          <text x="612" y="78" text-anchor="middle" fill="var(--ink)">TCP / IOCP</text>
+          <text x="612" y="93" text-anchor="middle">32KB 청크</text>
+          <line x1="514" y1="80" x2="552" y2="80" stroke="var(--ink-3)" marker-end="url(#a)"/>
+          <text x="533" y="52" text-anchor="middle" fill="var(--ink-3)" font-size="10">← 여기만 시스템 메모리</text>
+
+          <!-- client -->
+          <text x="700" y="26" fill="var(--signal)" font-size="10.5" letter-spacing="1.4">CLIENT</text>
+          <rect x="696" y="36" width="272" height="120" fill="none" stroke="var(--rule-2)" stroke-dasharray="4 3"/>
+
+          <rect x="710" y="58" width="112" height="44" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="766" y="78" text-anchor="middle" fill="var(--ink)">NVDEC</text>
+          <text x="766" y="93" text-anchor="middle">cuvid 파서</text>
+
+          <rect x="842" y="58" width="112" height="44" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="898" y="78" text-anchor="middle" fill="var(--ink)">CUDA 커널</text>
+          <text x="898" y="93" text-anchor="middle">NV12 → BGRA</text>
+
+          <line x1="670" y1="80" x2="706" y2="80" stroke="var(--ink-3)" marker-end="url(#a)"/>
+          <line x1="824" y1="80" x2="838" y2="80" stroke="var(--ink-3)" marker-end="url(#a)"/>
+          <text x="766" y="128" text-anchor="middle" fill="var(--ink-3)" font-size="10">콜백이 파서 안에서</text>
+          <text x="898" y="128" text-anchor="middle" fill="var(--ink-3)" font-size="10">출력 슬롯 + CUDA 이벤트</text>
+
+          <path d="M898 106 L898 178 L520 178" fill="none" stroke="var(--ink-3)" marker-end="url(#a)"/>
+          <rect x="404" y="158" width="112" height="40" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="460" y="183" text-anchor="middle" fill="var(--ink)">지터 버퍼 → 표시</text>
+
+          <!-- stage timing bar -->
+          <text x="14" y="236" fill="var(--ink-3)" font-size="10.5" letter-spacing="1.2">이 모듈이 책임지는 구간 (1080p 60fps 실측 p50 3.7ms)</text>
+          <rect x="14" y="248" width="940" height="26" fill="var(--paper-3)" stroke="var(--rule)"/>
+          <rect x="14" y="248" width="150" height="26" fill="var(--signal-soft)" stroke="var(--signal)"/>
+          <text x="89" y="266" text-anchor="middle" fill="var(--signal-2)">큐 → 제출</text>
+          <rect x="164" y="248" width="300" height="26" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="314" y="266" text-anchor="middle">BGRA 복사 + NV12 변환 + Map</text>
+          <rect x="464" y="248" width="330" height="26" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="629" y="266" text-anchor="middle">NVENC 하드웨어 인코딩 (완료 이벤트 대기 ≈1.35ms)</text>
+          <rect x="794" y="248" width="160" height="26" fill="var(--signal-soft)" stroke="var(--signal)"/>
+          <text x="874" y="266" text-anchor="middle" fill="var(--signal-2)">비트스트림 회수 → 콜백</text>
+
+          <text x="14" y="308" fill="var(--ink-3)" font-size="10.5">프레임당 immediate context 게이트 획득 6 회 — 렌더러와 같은 디바이스를 쓰면 이 6 회가 전부 경합 지점이 된다</text>
+          <text x="14" y="328" fill="var(--ink-3)" font-size="10.5">그래서 서버는 캡처와 인코더의 디바이스를 분리하고, 공유 텍스처로만 건넨다</text>
+          <text x="14" y="356" fill="var(--ink-3)" font-size="10.5">색: 캡처 BGRA(full range) → BT.709 full range NV12 → VUI 에 명시 → 디코더가 같은 계수로 역변환</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>그림 2 — 전체 경로. 픽셀이 시스템 메모리로 내려오는 지점은 없다.</figcaption>
+  </figure>
+
+  <h3>단계별로 무슨 일이 일어나는가</h3>
+  <ol class="steps">
+    <li><b>캡처 → 공유 텍스처</b>
+      <p>캡처 엔진이 자기 디바이스의 BGRA 슬롯에 데스크톱을 복사한다. 이 텍스처는
+      <code>KEYEDMUTEX | NTHANDLE</code> 로 만들어져 있어 인코더 디바이스에서 열 수 있다.</p></li>
+
+    <li><b>공유 텍스처 → 인코더 BGRA 슬롯</b>
+      <p>인코더가 keyed mutex 를 잡고 <code>CopyResource</code> 한 뒤 <strong>즉시 놓는다.</strong>
+      이 한 줄이 구조의 전부다 — 이후 작업은 전부 인코더 디바이스 안의 일이라,
+      드라이버 안에서 얼마나 오래 블로킹하든 캡처 쪽은 영향을 받지 않는다.</p></li>
+
+    <li><b>BGRA → NV12</b>
+      <p><code>ID3D11VideoProcessor</code> 고정 기능으로 변환한다. BT.709 계수, full range
+      (<code>NOMINAL_RANGE_0_255</code>). 이 선택이 인코더 VUI 와 짝을 이룬다.</p></li>
+
+    <li><b>NVENC 제출</b>
+      <p><code>nvEncMapInputResource</code> → <code>nvEncEncodePicture</code>.
+      슬롯마다 완료 이벤트를 달아 보내고 <strong>기다리지 않고 돌아온다.</strong></p></li>
+
+    <li><b>완료 회수</b>
+      <p>별도 스레드가 완료 이벤트를 기다렸다가 <code>nvEncLockBitstream</code> 으로 비트스트림을
+      복사하고, <strong>슬롯을 먼저 반납한 뒤</strong> 앱 콜백을 부른다.</p></li>
+
+    <li><b>전송 → 파싱</b>
+      <p>앱이 32KB 청크로 쪼개 보낸다. 클라이언트는 받은 덩어리를 그대로
+      <code>cuvidParseVideoData</code> 에 먹인다.</p></li>
+
+    <li><b>디코딩 → 표시</b>
+      <p>파서가 <strong>같은 스레드에서</strong> 세 콜백을 동기 호출한다. 마지막 콜백에서 CUDA 커널이
+      NV12 를 BGRA 로 바꿔 D3D11 텍스처에 쓰고, CUDA 이벤트를 기록한다.
+      앱은 <code>AcquireFrame</code> 에서 그 이벤트를 기다렸다가 텍스처를 받는다.</p></li>
+  </ol>
+
+  <div class="note">
+    <span class="lbl">색공간을 명시하는 이유</span>
+    <p>컨버터가 RGB full range 를 BT.709 로 변환하므로, 인코더도 SPS 의 VUI 에
+    <code>videoFullRangeFlag = 1</code> 과 BT.709 계수를 <strong>명시적으로 적어 보낸다.</strong></p>
+    <p>적지 않으면 수신측이 추측한다. 대부분의 디코더는 SD 가 아니면 BT.709 로 가정하지만
+    range 는 limited 로 가정하는 경우가 많아, <strong>검정이 들뜨고 흰색이 회색으로 보이는</strong>
+    증상이 생긴다. 코드 한 줄로 막을 수 있는 종류의 버그다.</p>
+  </div>
+</section>
+
+<!-- ============================= NEW: 동시성 모델 ============================= -->
+<section id="s4b">
+  <h2>동시성 모델</h2>
+  <p class="sub">비동기가 세 종류다. 각각 기다리는 주체가 다르고, 그래서 도구도 다르다.</p>
+
+  <h3>세 가지 비동기</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>경계</th><th>무엇이 비동기인가</th><th>기다리는 도구</th><th>기다리는 쪽</th></tr></thead>
+      <tbody>
+        <tr><td>CPU ↔ CPU</td><td>제출과 회수가 서로를 기다리지 않는다</td>
+            <td>원자 카운터 <code>m_pendingFrameCount</code></td><td>아무도</td></tr>
+        <tr><td>CPU ↔ NVENC</td><td><code>nvEncEncodePicture</code> 가 즉시 반환</td>
+            <td>슬롯별 Win32 이벤트</td><td>완료 스레드</td></tr>
+        <tr><td>CPU ↔ CUDA</td><td>커널·복사가 스트림에 실릴 뿐</td>
+            <td><code>CUevent</code> + <code>cuEventSynchronize</code></td><td><code>AcquireFrame</code> 호출자</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    셋을 같은 도구로 풀려고 하면 어느 하나가 과하거나 모자라게 된다.
+    CPU 끼리는 <strong>순서만 지키면 되고</strong>, GPU 와는 <strong>완료를 확인할 방법이 있어야 한다.</strong>
+  </p>
+
+  <figure>
+    <div class="svgbox">
+      <svg viewBox="0 0 940 400" role="img" aria-label="인코드 스레드, 완료 스레드, NVENC 하드웨어가 시간 축에서 겹쳐 동작하는 모습과 그 사이의 동기화 지점">
+        <defs>
+          <marker id="ta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--signal)"/></marker>
+        </defs>
+        <g font-family="var(--mono)" font-size="10.5" fill="var(--ink-2)">
+          <text x="14" y="22" fill="var(--ink-3)" letter-spacing="1.2">프레임 3장이 파이프라인에서 겹치는 모습 (슬롯 깊이 4)</text>
+
+          <!-- lanes -->
+          <text x="14" y="66" fill="var(--signal)" font-size="10">ENCODE THREAD</text>
+          <line x1="14" y1="74" x2="926" y2="74" stroke="var(--rule)"/>
+          <text x="14" y="146" fill="var(--ink-3)" font-size="10">NVENC HW</text>
+          <line x1="14" y1="154" x2="926" y2="154" stroke="var(--rule)"/>
+          <text x="14" y="226" fill="var(--signal)" font-size="10">COMPLETION THREAD</text>
+          <line x1="14" y1="234" x2="926" y2="234" stroke="var(--rule)"/>
+
+          <!-- frame N -->
+          <rect x="120" y="82" width="180" height="26" fill="var(--signal-soft)" stroke="var(--signal)"/>
+          <text x="210" y="100" text-anchor="middle" fill="var(--signal-2)">Stage + Convert + Map  N</text>
+          <rect x="300" y="82" width="52" height="26" fill="var(--paper-3)" stroke="var(--rule-2)"/>
+          <text x="326" y="100" text-anchor="middle">Encode</text>
+
+          <rect x="300" y="162" width="250" height="26" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="425" y="180" text-anchor="middle">NVENC 인코딩  N  (≈1.35 ms)</text>
+          <path d="M352 108 L352 158" fill="none" stroke="var(--signal)" stroke-dasharray="3 2" marker-end="url(#ta)"/>
+
+          <rect x="550" y="242" width="150" height="26" fill="var(--signal-soft)" stroke="var(--signal)"/>
+          <text x="625" y="260" text-anchor="middle" fill="var(--signal-2)">Lock → memcpy → 콜백  N</text>
+          <path d="M550 188 L550 238" fill="none" stroke="var(--signal)" stroke-dasharray="3 2" marker-end="url(#ta)"/>
+          <text x="560" y="214" fill="var(--ink-3)">completion event</text>
+
+          <!-- frame N+1 -->
+          <rect x="360" y="82" width="180" height="26" fill="var(--signal-soft)" stroke="var(--signal)" opacity="0.72"/>
+          <text x="450" y="100" text-anchor="middle" fill="var(--signal-2)">Stage + Convert + Map  N+1</text>
+          <rect x="540" y="82" width="52" height="26" fill="var(--paper-3)" stroke="var(--rule-2)"/>
+          <text x="566" y="100" text-anchor="middle">Encode</text>
+          <rect x="560" y="162" width="250" height="26" fill="var(--paper)" stroke="var(--rule-2)" opacity="0.72"/>
+          <text x="685" y="180" text-anchor="middle">NVENC 인코딩  N+1</text>
+
+          <!-- frame N+2 -->
+          <rect x="600" y="82" width="180" height="26" fill="var(--signal-soft)" stroke="var(--signal)" opacity="0.5"/>
+          <text x="690" y="100" text-anchor="middle" fill="var(--signal-2)">Stage + Convert  N+2</text>
+
+          <line x1="14" y1="300" x2="926" y2="300" stroke="var(--rule-2)"/>
+          <text x="14" y="322" fill="var(--ink)">인코드 스레드는 GPU 를 한 번도 기다리지 않는다 — 제출하고 바로 다음 프레임으로 간다.</text>
+          <text x="14" y="342" fill="var(--ink-2)">완료 스레드는 프레임당 약 1.35 ms 를 이벤트 대기에서 논다. 그 유휴가 앱 콜백 비용을 흡수한다(14 ms 까지 무영향).</text>
+          <text x="14" y="362" fill="var(--ink-2)">두 스레드가 만나는 지점은 슬롯 장부 하나 — m_pendingFrames[] 와 m_pendingFrameCount. 락은 없다.</text>
+          <text x="14" y="386" fill="var(--ink-3)">깊이를 늘리면 위 막대가 더 겹치지만, 그만큼 한 프레임이 파이프라인에 머무는 시간도 길어진다(Little's Law).</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>그림 3 — 제출과 회수를 나눈 이유. 인코드 스레드가 GPU 대기에 묶이지 않는다.</figcaption>
+  </figure>
+
+  <h3>어디에 락을 쓰고 어디에 쓰지 않는가</h3>
+  <p>
+    이 모듈은 <strong>락을 전부 없앤 설계가 아니다.</strong> 판단 기준은 하나다 —
+    <strong>기다리는 것이 목적이면 커널 객체, 기다리면 지는 것이면 원자 연산.</strong>
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>대상</th><th>동기화</th><th>이유</th></tr></thead>
+      <tbody>
+        <tr><td><code>EncodeFrameQueue</code> / <code>DecodePacketQueue</code></td>
+            <td>SRWLOCK + CONDITION_VARIABLE</td>
+            <td><strong>기다리는 것이 목적.</strong> 프레임이 없으면 워커는 자야 한다 — 스핀하면 코어를 태운다</td></tr>
+        <tr><td>슬롯 장부 (<code>submitted</code>, <code>pendingFrameCount</code>)</td>
+            <td>원자 연산</td>
+            <td>제출이 회수를 기다리면 그 프레임은 이미 늦는다</td></tr>
+        <tr><td>출력 슬롯 점유 (<code>slotHeldByApp[]</code>)</td>
+            <td>원자 Exchange</td>
+            <td>앱이 렌더링하는 동안 디코더가 막히면 안 된다</td></tr>
+        <tr><td>시퀀스 (<code>m_inputSequence</code> / <code>m_outputSequence</code>)</td>
+            <td>Increment / ReadAcquire</td>
+            <td>매 프레임 읽고 쓰는 핫 경로</td></tr>
+        <tr><td>통계 카운터 20여 개</td><td>Increment64</td><td>정확성보다 비간섭이 중요</td></tr>
+        <tr><td>콜백 포인터</td><td>SRWLOCK (shared)</td>
+            <td>교체는 드물고 호출은 잦다 — 읽기 공유 락이 정확히 이 모양</td></tr>
+        <tr><td>설정 (<code>m_userConfig</code>)</td><td>SRWLOCK</td>
+            <td>구조체 전체가 일관돼야 한다. 원자 연산으로 표현할 수 없다</td></tr>
+        <tr><td>immediate context</td><td>게이트 (SRWLOCK exclusive)</td>
+            <td>D3D11 컨텍스트가 스레드 안전하지 않다. 선택의 여지가 없다</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="lbl">큐에 락을 쓰는 것이 타협이 아닌 이유</span>
+    <p>유입 큐는 <strong>워커를 재우는 것이 기능</strong>이다. 프레임이 없을 때 스핀하면
+    32 코어 중 하나를 100% 태우면서 아무것도 하지 않는다.
+    <code>SleepConditionVariableSRW</code> 는 그 대기를 커널에 맡긴다.</p>
+    <p>그리고 이 큐는 초당 60회만 돈다. 락 획득 비용은 위 측정에서 <strong>0.1 µs 수준</strong>이고,
+    60 fps 예산의 <strong>0.0006%</strong> 다. <strong>락을 쓰면 안 되는 자리와 써도 되는 자리를 나누는 것이
+    락을 없애는 것보다 중요하다.</strong></p>
+  </div>
+
+  <h3>큐 슬롯의 상태 기계</h3>
+  <figure>
+    <div class="svgbox">
+      <svg viewBox="0 0 900 200" role="img" aria-label="큐 슬롯이 FREE에서 QUEUED, HELD를 거쳐 다시 FREE로 돌아가는 상태 전이도와, latest-only 정책으로 QUEUED가 곧바로 FREE로 버려지는 경로">
+        <defs><marker id="qa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-3)"/></marker>
+          <marker id="qd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--bad)"/></marker></defs>
+        <g font-family="var(--mono)" font-size="11.5" fill="var(--ink-2)">
+          <rect x="40" y="70" width="150" height="52" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="115" y="101" text-anchor="middle" fill="var(--ink)" font-size="13">SLOT_FREE</text>
+
+          <rect x="330" y="70" width="160" height="52" fill="var(--signal-soft)" stroke="var(--signal)"/>
+          <text x="410" y="101" text-anchor="middle" fill="var(--ink)" font-size="13">SLOT_QUEUED</text>
+
+          <rect x="640" y="70" width="150" height="52" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="715" y="101" text-anchor="middle" fill="var(--ink)" font-size="13">SLOT_HELD</text>
+
+          <line x1="192" y1="96" x2="324" y2="96" stroke="var(--ink-3)" marker-end="url(#qa)"/>
+          <text x="258" y="86" text-anchor="middle" fill="var(--ink-3)" font-size="10">EnqueueFrame</text>
+
+          <line x1="492" y1="96" x2="634" y2="96" stroke="var(--ink-3)" marker-end="url(#qa)"/>
+          <text x="563" y="86" text-anchor="middle" fill="var(--ink-3)" font-size="10">AcquireReadFrame</text>
+
+          <path d="M715 124 C715 172, 115 172, 115 126" fill="none" stroke="var(--ink-3)" marker-end="url(#qa)"/>
+          <text x="415" y="188" text-anchor="middle" fill="var(--ink-3)" font-size="10">ReleaseReadFrame — 원본 자원을 앱에 반납하고 슬롯을 비운다</text>
+
+          <path d="M380 66 C380 20, 150 20, 130 64" fill="none" stroke="var(--bad)" marker-end="url(#qd)"/>
+          <text x="255" y="22" text-anchor="middle" fill="var(--bad)" font-size="10">다음 EnqueueFrame 이 덮어쓴다 (latest-only) — droppedInputQueue</text>
+
+          <text x="820" y="96" fill="var(--ink-3)" font-size="10">동시에</text>
+          <text x="820" y="110" fill="var(--ink-3)" font-size="10">QUEUED 1 + HELD 1</text>
+          <text x="820" y="124" fill="var(--ink-3)" font-size="10">→ 깊이 2 면 충분</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>그림 4 — 인코더 유입 큐. 붉은 경로가 <strong>정상 동작</strong>이라는 점이 보통 큐와 다르다.</figcaption>
+  </figure>
+  <p>
+    보통의 큐는 "모든 항목이 처리된다" 를 전제한다. 실시간 인코딩에서는 그게 틀린 전제다 —
+    인코더가 밀렸으면 중간 프레임은 <strong>처리되면 안 된다.</strong>
+    그래서 <code>EnqueueFrame</code> 이 매번 <code>DropQueuedFrames_NoLock()</code> 을 먼저 부르고,
+    <code>queuedCount</code> 를 항상 1 로 덮어쓴다.
+  </p>
+  <p>
+    이 성질 덕분에 <strong>어느 시점에도 QUEUED 1 개 + HELD 1 개만 존재</strong>하고, 슬롯 2 개면 충분하다.
+    버려진 프레임은 반납 콜백으로 앱에 돌아가 캡처 슬롯이 풀린다 —
+    큐 형태를 유지한 이유가 이 반납 경로다.
+  </p>
+
+  <h3>원자 연산이 실제로 벌어준 것</h3>
+  <p class="sub" style="margin-top:-6px">같은 머신에서 직접 측정했다 — 32 논리 코어, TSC 4.29 GHz, /O2.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>원자 읽기 관용구</th><th class="num">ns/op</th><th class="num">cycles/op</th><th class="num">처리량</th></tr></thead>
+      <tbody>
+        <tr><td><code>InterlockedCompareExchange(&amp;v, 0, 0)</code></td><td class="num">3.444</td><td class="num">14.78</td><td class="num">290 Mops/s</td></tr>
+        <tr><td><code>ReadAcquire(&amp;v)</code></td><td class="num">0.176</td><td class="num">0.76</td><td class="num">5,684 Mops/s</td></tr>
+        <tr><td><strong>차이</strong></td><td class="num"><strong>19.6×</strong></td><td class="num"><strong>−14.03</strong></td><td class="num"><strong>+1,858%</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    CAS 로 읽는 관용구는 <code>lock cmpxchg</code> 다 — <strong>캐시 라인을 배타적으로 가져가고 양방향 펜스를
+    치는 read-modify-write</strong> 로 단순 읽기를 한다. 경합이 붙으면 차이가 더 벌어진다:
+  </p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>쓰기 1 + 읽기 N</th><th class="num">CAS</th><th class="num">ReadAcquire</th><th class="num">배수</th></tr></thead>
+      <tbody>
+        <tr><td>읽기 스레드 1</td><td class="num">57.2 M/s</td><td class="num">980.9 M/s</td><td class="num">17.2×</td></tr>
+        <tr><td>읽기 스레드 3</td><td class="num">64.9 M/s</td><td class="num">3,249.1 M/s</td><td class="num">50.0×</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    CAS 는 읽기만 해도 라인을 배타적으로 가져가므로 <strong>읽는 스레드끼리 서로를 밀어낸다</strong> —
+    스레드를 3배로 늘려도 57 → 65 M/s 로 거의 늘지 않는다. 순수 읽기는 라인을 공유 상태로 두므로
+    <strong>3.3배로 선형에 가깝게</strong> 늘어난다.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>4 스레드가 4 카운터를 증가</th><th class="num">처리량</th><th class="num">배수</th></tr></thead>
+      <tbody>
+        <tr><td>같은 캐시 라인</td><td class="num">120.0 M/s</td><td class="num">1.0×</td></tr>
+        <tr><td><code>alignas(64)</code> 로 분리</td><td class="num">1,113.2 M/s</td><td class="num"><strong>9.3×</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    이 모듈의 멤버 배치가 그대로 이 표다. 투입 측(<code>m_timestamp</code>, <code>m_inputSequence</code>,
+    <code>m_submittedFrameCount</code>)과 완료 측(<code>m_outputSequence</code>,
+    <code>m_completedFrameCount</code>, <code>m_lostFrameCount</code>)을 <code>alignas(64)</code> 로 갈라 둔 것은
+    <strong>두 스레드가 매 프레임 같은 라인을 무효화하는 것을 막기 위해서</strong>다.
+  </p>
+
+  <div class="note">
+    <span class="lbl">정직하게 — 이 모듈에서 절대량은 작다</span>
+    <p>인코드 경로의 원자 읽기는 프레임당 십수 회다. 14.03 사이클 × 15 ≈ <strong>210 사이클</strong>,
+    4.29 GHz 에서 약 <strong>49 ns</strong>. 60 fps 예산 16.7 ms 의 <strong>0.0003%</strong> 이고,
+    이 파이프라인의 실제 지연 3.7 ms 와 비교해도 무의미한 크기다.</p>
+    <p>그러니 이 치환의 값어치는 <strong>이 모듈의 프레임 예산을 아낀 것이 아니다.</strong>
+    의미가 큰 곳은 초당 수십만 회 도는 네트워크 엔진의 핫 경로이고, 여기서는
+    <strong>"읽기에 쓰기 명령을 쓰지 않는다" 는 규칙의 일관성</strong>이 얻은 것에 가깝다.</p>
+    <p>반면 <strong>캐시 라인 분리(9.3배)와 게이트 구간 축소</strong>는 절대량으로도 의미가 있었다.
+    특히 게이트는 <a href="#s7">지연의 구조</a>에서 보듯 렌더러 점유율에 비례해 지연을
+    <strong>4.8배</strong>까지 밀어올린다 — 같은 "동기화 비용" 이라도 자릿수가 다르다.</p>
+  </div>
+</section>
+
+<!-- ============================= 4 ============================= -->
+<section id="s4">
+  <h2>인코더 파이프라인</h2>
+  <p class="sub">프레임 한 장이 슬롯을 잡고 놓기까지.</p>
+
+<pre><i>// 제출 측 — EncodeThread::Run</i>
+
+item = inputQueue.<b>AcquireReadPacket</b>()          <i>latest-only 큐. 밀리면 오래된 것이 버려진다</i>
+  ├ nullptr &amp; 큐 닫힘 → 정상 종료
+  └ 계속
+
+<b>QueryKeyFrameRequest</b>()                        <i>앱에 "이번 것을 IDR 로?" 를 매 프레임 묻는다</i>
+  → true 면 encoder.RequestKeyFrame()
+
+<b>if</b> (!encoder.CanSubmitFrame())                 <i>빈 슬롯 없음</i>
+    droppedNoEncoderSlot++; <em>continue</em>          <i>← 기다리지 않는다</i>
+
+<b>StageFrame</b>(texture)  <b>또는</b>  <b>StageFrameFromSharedSlot</b>(slot)
+    └ keyed mutex → CopyResource → Flush → mutex 해제
+inputQueue.<b>ReleaseReadPacket</b>()                  <i>원본은 여기서 바로 반납</i>
+
+<b>SubmitFrame</b>(frameId)
+    ├ converter-&gt;Convert(slot)                  <i>BGRA → NV12</i>
+    ├ <b>nvEncMapInputResource</b>(slot)
+    ├ <b>nvEncEncodePicture</b>(slot, completionEvent)  <i>기다리지 않고 반환</i>
+    └ pending[slot].submitted = TRUE; pendingCount++
+</pre>
+
+<pre><i>// 회수 측 — EncodeCompletionThread::Run</i>
+
+<b>if</b> (pendingCount == 0)
+    WaitForMultipleObjects(stopEvent, frameSubmittedEvent)   <i>바쁜 대기 없음</i>
+
+<b>ProcessEncodeCompletion</b>(block=true, invokeCallback=true)
+    ├ pending[out].submitted != TRUE → <em>링 장부 붕괴. 세션 포기</em>
+    ├ <b>WaitForSingleObject</b>(completionEvent, 20s)
+    │     TIMEOUT → NVENC 가 슬롯을 쥐고 있다. <em>복구 불가</em>
+    ├ <b>nvEncLockBitstream</b> → 패킷 버퍼로 memcpy → Unlock   <i>게이트 안 잡음</i>
+    ├ <b>nvEncUnmapInputResource</b>                            <i>실패 시 복구 불가</i>
+    ├ <em>ClearPendingFrame(out)</em>   <i>← 콜백보다 먼저 슬롯을 반납</i>
+    └ 앱 콜백(packet)
+
+결과별 처리
+    Completed → 연속 유실 카운터 0
+    FrameLost → 8 회 연속이면 세션 포기
+    Fatal     → 이미 faulted. 스레드 종료
+</pre>
+
+  <h3>왜 슬롯을 콜백보다 먼저 반납하는가</h3>
+  <p>
+    이 변경은 <strong>성능 개선이 아니다.</strong> 측정해 보니 처리량은 오차 범위였고
+    포화 지연은 오히려 올라갔다(2000 µs 콜백에서 6.33 → 8.02 ms).
+  </p>
+  <p>
+    이유가 분명했다. 이전에는 콜백 동안 슬롯이 묶여 파이프라인이 설정된 깊이 4 를
+    다 쓰지 못했고, 그 <strong>우연한 스로틀</strong>이 지연을 낮추고 있었다. 지금은 깊이 4 를 온전히 쓴다
+    — 4 / 488 fps = 8.2 ms 로 Little's Law 와 일치한다.
+  </p>
+  <p>
+    그래도 이 구조를 유지한다. <strong>인코더 슬롯 점유 시간이 앱 콜백 시간에 의존하지 않게</strong>
+    되기 때문이다. 정상 상태 측정으로는 안 보이는 테일 이벤트 — 힙 경합이나 페이지 폴트로
+    콜백이 드물게 수 ms 튀는 경우 — 가 슬롯 고갈로 번지지 않는다.
+    지연을 낮추고 싶으면 우연한 스로틀에 기대는 대신 <code>encodeSlotCount</code> 를 줄이는 것이 맞다.
+  </p>
+
+  <h3>비트스트림 회수에서 게이트를 잡지 않는다</h3>
+  <p>
+    <code>ReadEncodedBitstream</code> 이 만지는 것은 <code>nvEncCreateBitstreamBuffer</code> 로 받아 둔
+    <strong>NVENC 자체 버퍼뿐</strong>이다. 등록된 D3D11 리소스가 호출 경로에 없으므로 immediate context
+    와 무관하다. 반면 D3D11 리소스를 건드리는 <code>UnmapInputResource</code> 는 게이트를 유지한다.
+  </p>
+  <p>
+    이 구간은 패킷 <code>memcpy</code> 까지 포함해서 완료 스레드가 게이트를 잡는 구간 중 가장 길었고,
+    <strong>두 스레드가 실제로 부딪히는 자리가 여기였다.</strong> 근거를 확인하고 게이트를 걷어냈다.
+  </p>
+
+  <h3>B 프레임을 지원하지 않는다고 명시한다</h3>
+<pre><b>if</b> (nvStatus == <em>NV_ENC_ERR_NEED_MORE_INPUT</em>) {
+    <i>// 슬롯 하나 = 출력 하나를 가정한 링 구조다.</i>
+    <i>// 여기서 true 를 돌려주면 그 슬롯의 completion event 가 영원히</i>
+    <i>// signal 되지 않아 완료 스레드가 20초 뒤 세션을 포기한다.</i>
+    <i>// 조용히 매달리는 대신 즉시 실패한다.</i>
+    <b>return</b> false;
+}
+</pre>
+  <p>
+    <code>frameIntervalP = 1</code> 과 lookahead 없음 설정에서는 발생하지 않는다. 그래도 방어를 넣은 것은
+    <strong>설정이 바뀌었을 때 증상이 "20초 뒤 정지" 로 나타나는 것을 막기 위해서</strong>다.
+    지원하지 않는 조합은 빨리, 이유와 함께 실패해야 한다.
+  </p>
+</section>
+
+<!-- ============================= 5 ============================= -->
+<section id="s5">
+  <h2>슬롯 링과 두 스레드</h2>
+  <p class="sub">제출과 회수를 분리하고, 그 사이를 원자 카운터 하나로 잇는다.</p>
+
+  <figure>
+    <div class="svgbox">
+      <svg viewBox="0 0 900 250" role="img" aria-label="제출 스레드가 입력 시퀀스를 올리고 완료 스레드가 출력 시퀀스를 올리며 슬롯 링을 순환하는 구조">
+        <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--ink-3)"/></marker></defs>
+        <g font-family="var(--mono)" font-size="11" fill="var(--ink-2)">
+          <rect x="16" y="40" width="170" height="70" fill="var(--paper)" stroke="var(--signal)"/>
+          <text x="101" y="64" text-anchor="middle" fill="var(--signal)" font-size="10.5" letter-spacing="1.2">ENCODE THREAD</text>
+          <text x="101" y="84" text-anchor="middle" fill="var(--ink)">Stage → Submit</text>
+          <text x="101" y="100" text-anchor="middle">m_inputSequence++</text>
+
+          <rect x="714" y="40" width="170" height="70" fill="var(--paper)" stroke="var(--rule-2)"/>
+          <text x="799" y="64" text-anchor="middle" fill="var(--ink-3)" font-size="10.5" letter-spacing="1.2">COMPLETION THREAD</text>
+          <text x="799" y="84" text-anchor="middle" fill="var(--ink)">Wait → Lock → 콜백</text>
+          <text x="799" y="100" text-anchor="middle">m_outputSequence++</text>
+
+          <g>
+            <rect x="250" y="34" width="90" height="82" fill="var(--signal-soft)" stroke="var(--signal)"/>
+            <text x="295" y="58" text-anchor="middle" fill="var(--ink)">slot 0</text>
+            <text x="295" y="76" text-anchor="middle" fill="var(--signal-2)">submitted</text>
+            <text x="295" y="94" text-anchor="middle" fill="var(--ink-3)" font-size="10">event ↺</text>
+
+            <rect x="350" y="34" width="90" height="82" fill="var(--signal-soft)" stroke="var(--signal)"/>
+            <text x="395" y="58" text-anchor="middle" fill="var(--ink)">slot 1</text>
+            <text x="395" y="76" text-anchor="middle" fill="var(--signal-2)">submitted</text>
+            <text x="395" y="94" text-anchor="middle" fill="var(--ink-3)" font-size="10">event ↺</text>
+
+            <rect x="450" y="34" width="90" height="82" fill="var(--paper)" stroke="var(--rule-2)"/>
+            <text x="495" y="58" text-anchor="middle" fill="var(--ink)">slot 2</text>
+            <text x="495" y="80" text-anchor="middle" fill="var(--ink-3)">free</text>
+
+            <rect x="550" y="34" width="90" height="82" fill="var(--paper)" stroke="var(--rule-2)"/>
+            <text x="595" y="58" text-anchor="middle" fill="var(--ink)">slot 3</text>
+            <text x="595" y="80" text-anchor="middle" fill="var(--ink-3)">free</text>
+          </g>
+
+          <line x1="190" y1="75" x2="244" y2="75" stroke="var(--ink-3)" marker-end="url(#b)"/>
+          <line x1="646" y1="75" x2="710" y2="75" stroke="var(--ink-3)" marker-end="url(#b)"/>
+
+          <text x="445" y="146" text-anchor="middle" fill="var(--ink-3)">m_pendingFrameCount = 2 · 슬롯 인덱스 = sequence &amp; (slotCount - 1)</text>
+          <text x="445" y="168" text-anchor="middle" fill="var(--ink-3)">pending 이 0 이 되면 allSlotsFreeEvent · 제출되면 frameSubmittedEvent</text>
+
+          <rect x="16" y="192" width="868" height="40" fill="var(--paper)" stroke="var(--rule)"/>
+          <text x="30" y="209" fill="var(--ink)">부하 시 최악 지연 = 슬롯 깊이 ÷ 처리량 (Little's Law)</text>
+          <text x="30" y="225" fill="var(--ink-3)">깊이 2 → 2.54ms · 깊이 4 → 5.08ms · 깊이 8 → 10.29ms · 처리량은 741/735/738 fps 로 평평</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>그림 5 — 슬롯 수는 버퍼 여유가 아니라 <strong>지연 예산</strong>이다.</figcaption>
+  </figure>
+
+  <h3>이벤트 두 개의 수명을 스레드와 분리했다</h3>
+  <p>
+    <code>m_allSlotsFreeEvent</code> 와 <code>m_frameSubmittedEvent</code> 는 <strong>인코더가 소유</strong>하고
+    <code>Initialize</code> 에서 만들어 <code>Destroy</code> 끝에서 닫는다. 완료 스레드와 함께 만들고 지우면
+    <code>SubmitFrame</code>(인코드 스레드)과 <code>WaitForPendingFrames</code>(임의 스레드)가
+    <strong>이미 닫힌 핸들을 읽는 창</strong>이 생긴다.
+  </p>
+  <p>
+    같은 이유로 <code>SubmitFrame</code> 은 완료 스레드 객체 포인터를 역참조하지 않는다.
+    그 포인터는 <code>DestroyEncodeCompletionThread</code> 가 지우므로 use-after-free 창이 된다. 이벤트만 만진다.
+  </p>
+
+  <h3>ResetEvent 순서 하나가 만드는 창</h3>
+<pre>pendingCount++;                       <i>먼저 올리고</i>
+
+<b>ResetEvent</b>(allSlotsFreeEvent);        <i>그 다음에 리셋</i>
+<b>if</b> (GetPendingFrameCount() == 0)       <i>리셋 직후 다시 확인</i>
+    <b>SetEvent</b>(allSlotsFreeEvent);       <i>그 사이에 드레인이 끝났으면 되돌린다</i>
+</pre>
+  <p>
+    올리기 <em>전</em> 값으로 판단하면, 그 사이에 완료 스레드가 pending 을 0 으로 만들며 <code>SetEvent</code> 한 것을
+    되돌리지 못해 <strong>pending &gt; 0 인데 이벤트는 SET</strong> 인 상태가 남는다.
+    그러면 <code>WaitForPendingFrames</code> 가 아직 남은 프레임을 두고 곧바로 통과한다.
+  </p>
+</section>
+
+<!-- ============================= 6 ============================= -->
+<section id="s6">
+  <h2>디코더 파이프라인</h2>
+  <p class="sub">인코더와 구조가 다르다. 콜백이 <strong>파서 안에서</strong> 동기로 불린다.</p>
+
+<pre><i>// DecodeThread::Run — 한 반복</i>
+
+item = inputQueue.<b>AcquireReadPacket</b>()     <i>큐가 자기 버퍼로 복사해 둔 비트스트림</i>
+
+<b>Parse</b>(data, size, timestamp)
+    └ <b>cuvidParseVideoData</b>              <i>── 이 호출 안에서 ──────────────┐</i>
+         ├ <b>OnVideoSequence</b>              <i>  해상도/포맷 확정, 필요시 재설정 │</i>
+         ├ <b>OnPictureDecode</b>              <i>  cuvidDecodePicture            │</i>
+         └ <b>OnPictureDisplay</b>             <i>  출력 슬롯에 쓰기               │</i>
+                                          <i>  ───────────────────────────────┘</i>
+
+<b>while</b> (frame = AcquireFrame())          <i>완성된 것을 전부 꺼낸다</i>
+    DispatchFrame(frame);                <i>앱 콜백 (여기서 블로킹하면 안 된다)</i>
+    ReleaseFrame(frame);
+
+inputQueue.<b>ReleaseReadPacket</b>()
+</pre>
+  <p class="cap">세 콜백은 <code>cuvidParseVideoData</code> 가 반환하기 전에 전부 끝난다</p>
+
+  <h3>OnPictureDisplay — 실제 일이 벌어지는 곳</h3>
+<pre><b>cuvidCtxLock</b>(videoContextLock)
+<b>cuvidMapVideoFrame</b>(picture_index) → NV12 device pointer
+
+<i>// 링이 한 바퀴 찼으면 오래된 쪽을 건너뛴다</i>
+<b>if</b> ((write - read) &gt;= slotCount)
+    droppedNotConsumed += ...;  read = write - slotCount + 1;
+
+slot = write &amp; (slotCount - 1)
+
+<b>if</b> (IsSlotHeldByApp(slot))               <i>앱이 렌더링 중인 텍스처다</i>
+    droppedPoolExhausted++; <em>이 프레임을 버린다</em>   <i>← 덮어쓰면 화면이 찢어진다</i>
+
+<i>── 게이트 진입 (CUDA-D3D11 interop 구간) ──</i>
+<b>cuGraphicsMapResources</b>(cudaOutputResources[slot])
+<b>ConvertNV12ToBGRA</b>(...)                  <i>커스텀 CUDA 커널</i>
+<b>cuMemcpy2DAsync</b>(staging → D3D11 array)  <i>device → device</i>
+<b>cuEventRecord</b>(decodeCompleteEvents[slot])
+<i>── 게이트 해제 ──</i>
+
+outputFrames[slot].timestamp = displayInfo-&gt;timestamp;
+<em>InterlockedIncrement(&amp;m_inputSequence);</em>   <i>페이로드를 쓰고 나서 시퀀스를 올린다</i>
+</pre>
+
+  <div class="note">
+    <span class="lbl">배리어를 하나 지운 이유</span>
+    <p>페이로드를 먼저 쓰고 시퀀스를 올린다. <code>InterlockedIncrement</code> 가 full barrier 라
+    이 순서는 컴파일러도 CPU 도 뒤집지 못한다 — 소비자가 시퀀스를 본 시점에 timestamp 는 반드시 보인다.
+    예전에 있던 명시적 <code>MemoryBarrier</code> 는 <strong>중복이었다.</strong></p>
+    <p>단, <strong>텍스처 내용은 이 배리어의 관할이 아니다.</strong> 그쪽은 GPU 가 쓰므로
+    CUDA 이벤트와 <code>AcquireFrame</code> 의 <code>cuEventSynchronize</code> 가 담당한다.
+    CPU 배리어와 GPU 완료는 서로 다른 문제다.</p>
+  </div>
+
+  <h3>GPU 대기를 AcquireFrame 으로 미룬 것에 대해</h3>
+  <p>
+    <code>OnPictureDisplay</code> 는 스트림을 동기화하지 않고 CUDA 이벤트만 기록하고 나온다.
+    대기는 프레임이 실제로 필요한 <code>AcquireFrame</code> 이 한다.
+  </p>
+  <p>
+    <strong>다만 이 비동기가 실제로 겹쳐지지는 않는다.</strong> <code>DecodeThread</code> 가 <code>Parse</code> 직후
+    같은 반복에서 <code>AcquireFrame</code> 을 부르므로, 방금 넣은 그 프레임을 곧바로 기다리게 된다.
+    미룬 거리는 사실상 0 이다.
+  </p>
+  <p>
+    그래도 이 모양이 맞다고 판단했다. 겹치게 하려면 드레인을 한 반복 뒤로 물려야 하는데
+    (N 을 파싱하면서 N-1 을 꺼내는 식), 그 대가가 <strong>60fps 에서 16.7 ms</strong> 다.
+    아끼는 쪽은 QHD 변환 커널과 device-to-device 복사라 1 ms 안쪽이다.
+    저지연이 목적인 파이프라인에서 <strong>그 거래는 방향이 반대다.</strong>
+    즉 이 비동기 구조가 버는 것은 처리량이 아니라, CPU 가 불필요하게 블로킹하지 않는 것뿐이다.
+  </p>
+
+  <h3>두 가지 드롭을 구분한다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>드롭</th><th>언제</th><th>의미</th><th>통지</th></tr></thead>
+      <tbody>
+        <tr><td><code>droppedPoolExhausted</code></td><td>쓰려는 슬롯을 앱이 쥐고 있다</td>
+            <td>앱이 <code>ReleaseFrame</code> 을 하지 않는다</td><td><code>OutputPoolExhausted</code></td></tr>
+        <tr><td><code>droppedNotConsumed</code></td><td>앱이 못 따라가 링이 밀렸다</td>
+            <td>최신 쪽으로 건너뛰었다 (라이브에서는 정상 정책)</td><td><code>OutputNotConsumed</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    앞은 <strong>버그 신호</strong>, 뒤는 <strong>부하 신호</strong>다. 같은 "프레임 유실" 로 묶으면 원인을 못 가린다.
+    <code>maxOutputLagFrames</code>(기본 3)를 넘기면 최신 프레임으로 점프한다 —
+    라이브 영상에서는 오래된 프레임을 전달하는 것보다 버리는 편이 낫다.
+  </p>
+</section>
+
+<!-- ============================= 7 ============================= -->
+<section id="s7">
+  <h2>지연의 구조</h2>
+  <p class="sub">직관이 세 번 틀렸고, 측정이 세 번 다 이유를 알려줬다.</p>
+
+  <h3>1. 슬롯을 늘리면 안전해지는 게 아니라 느려진다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>구성</th><th class="num">처리량</th><th class="num">p50</th><th class="num">p90</th><th class="num">p99</th><th>Little's Law</th></tr></thead>
+      <tbody>
+        <tr><td>sync (깊이 1)</td><td class="num">604 fps</td><td class="num">1.64 ms</td><td class="num">1.74</td><td class="num">1.98</td><td>—</td></tr>
+        <tr><td>async 깊이 2</td><td class="num">741 fps</td><td class="num">2.54 ms</td><td class="num">2.60</td><td class="num">3.64</td><td class="num">2.70 ms</td></tr>
+        <tr><td>async 깊이 4</td><td class="num">735 fps</td><td class="num">5.08 ms</td><td class="num">6.14</td><td class="num">6.21</td><td class="num">5.44 ms</td></tr>
+        <tr><td>async 깊이 8</td><td class="num">738 fps</td><td class="num">10.29 ms</td><td class="num">11.35</td><td class="num">11.46</td><td class="num">10.84 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    포화 상태에서 <strong>지연 = 깊이 ÷ 처리량</strong> 이 거의 정확히 맞는다. 처리량은 깊이 2~8 에서
+    741/735/738 로 사실상 평평하다. 즉 저지연 목적이면 <strong>깊이 2 가 8 보다 4배 유리하고
+    처리량 손실은 0</strong> 이다. "버퍼 많을수록 안전" 이라는 직관과 정반대다.
+  </p>
+  <p>
+    대신 깊이가 얕으면 일시적 스톨을 흡수하지 못해 프레임을 더 빨리 버린다.
+    원격 조작 용도라면 <strong>10 ms 늦게 도착하는 것보다 버리는 게 낫다</strong>는 판단으로 얕은 쪽을 골랐다.
+  </p>
+
+  <h3>2. sync 가 async 보다 빠른 게 아니다</h3>
+  <p>
+    비포화 상태(60 fps)에서 sync p50 3.691 ms, async p50 3.682 ms — <strong>동일하다.</strong>
+    async 는 처리량 여유를 22% 더 주면서(741 vs 604) 지연 손실이 없다.
+    비동기 구조의 값어치는 "빠름" 이 아니라 <strong>여유</strong>다.
+  </p>
+
+  <h3>3. 60fps 에서 지연의 절반 이상은 코드가 아니라 GPU 전력 상태다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>투입</th><th class="num">SM 클럭</th><th class="num">메모리 클럭</th><th class="num">전력</th><th class="num">GPU 사용률</th><th class="num">p50</th></tr></thead>
+      <tbody>
+        <tr><td>30 fps</td><td class="num">720~840 MHz</td><td class="num">810 MHz</td><td class="num">30 W</td><td class="num">4 %</td><td class="num">8.11 ms</td></tr>
+        <tr><td>480 fps</td><td class="num">2600~2640 MHz</td><td class="num">15001 MHz</td><td class="num">61 W</td><td class="num">10 %</td><td class="num">1.92 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <code>min</code> 은 모든 투입 속도에서 1.6 ms 로 같다. <strong>하드웨어는 항상 그 속도를 낼 수 있는데
+    느린 투입에서만 느려진다.</strong> 메모리 클럭이 18.5 배 차이나고, 이 파이프라인은 대역폭 위주라
+    (프레임당 <code>CopyResource</code> 8.3 MB + <code>VideoProcessorBlt</code> 읽기/쓰기) 직접 영향을 받는다.
+  </p>
+  <p>
+    <strong>이건 코드로 고칠 수 없다.</strong> 배포 환경 설정 사항으로 분류하고 문서에 남겼다 —
+    전원 관리 모드 "최대 성능 우선", 또는 <code>nvidia-smi -lgc</code> 로 클럭 하한 고정.
+    동시에 대역폭이 병목이라는 뜻이므로, 프레임당 여분의 복사를 줄이는 개선의 기대 효과가
+    다운클럭 상태에서 오히려 <strong>더 커진다</strong>는 것도 같이 확인했다.
+  </p>
+
+  <h3>4. 남은 가장 큰 병목은 게이트 경합이다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>렌더 부하 (게이트 점유율)</th><th class="num">처리량</th><th class="num">p50</th><th class="num">p90</th><th class="num">p99</th><th class="num">드롭</th></tr></thead>
+      <tbody>
+        <tr><td>없음</td><td class="num">59.85 fps</td><td class="num">3.66 ms</td><td class="num">7.30</td><td class="num">9.33</td><td class="num">0</td></tr>
+        <tr><td>60Hz × 2ms (12%)</td><td class="num">59.85 fps</td><td class="num">5.56 ms</td><td class="num">8.84</td><td class="num">10.67</td><td class="num">0</td></tr>
+        <tr><td>120Hz × 5ms (60%)</td><td class="num">59.77 fps</td><td class="num">10.89 ms</td><td class="num">17.77</td><td class="num">26.76</td><td class="num">0</td></tr>
+        <tr><td>60Hz × 12ms (72%)</td><td class="num">59.78 fps</td><td class="num">17.49 ms</td><td class="num">26.55</td><td class="num">35.61</td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    데드락 없고 드롭 없고 처리량은 60 fps 를 지킨다. 하지만 <strong>지연이 렌더러의 점유율에
+    거의 비례해 늘어난다</strong>(72% 에서 4.8 배).
+  </p>
+  <p>
+    원인은 인코더가 게이트를 오래 잡아서가 아니다. 경합 스레드가 게이트를 얻기까지 기다린
+    최대 시간은 0.2~1.6 ms 에 그쳤다. 반대로 <strong>인코더가 프레임당 게이트를 6 회 요구하고,
+    그 매 회가 렌더러의 점유 시간만큼 밀린다.</strong>
+  </p>
+  <p>
+    구조적 해답은 명확하다 — <strong>인코딩용 디바이스를 분리하고 공유 텍스처로 넘기면
+    인코드 경로에 게이트가 아예 필요 없어진다.</strong> 서버는 이미 그 구조다.
+    렌더와 디코드를 함께 하는 클라이언트 쪽이 남은 과제다.
+  </p>
+
+  <h3>5. 콜백 예산은 이미 충분히 넓다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>콜백에서 태운 CPU</th><th class="num">처리량 (60fps 투입)</th><th class="num">p50</th><th class="num">슬롯 부족 드롭</th></tr></thead>
+      <tbody>
+        <tr><td>0 µs</td><td class="num">59.71 fps</td><td class="num">3.75 ms</td><td class="num">0</td></tr>
+        <tr><td>5,000 µs</td><td class="num">59.71 fps</td><td class="num">3.64 ms</td><td class="num">0</td></tr>
+        <tr><td>14,000 µs</td><td class="num">59.80 fps</td><td class="num">3.68 ms</td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    완료 스레드는 프레임당 약 1.35 ms 를 완료 이벤트 대기에서 <strong>놀고 있고</strong>, 그 유휴가 콜백
+    CPU 시간을 그대로 흡수한다. 실제 앱의 브로드캐스트 작업은 뷰어 8명 기준 100 µs 내외로
+    추정되니 <strong>100 배 이상 여유</strong>다.
+  </p>
+  <p>
+    그래서 <strong>비트스트림 링버퍼 + 디스패치 스레드를 만들지 않기로 했다.</strong>
+    측정 없이 추가했다면 복잡도만 늘었을 구조다. 콜백이 밀리초 단위로 무거워지거나
+    뷰어가 수십 단위로 늘면 다시 검토한다는 조건을 같이 적어 뒀다.
+  </p>
+</section>
+
+<!-- ============================= 8 ============================= -->
+<section id="s8">
+  <h2>최적화 기법</h2>
+  <p class="sub">효과를 숫자로 확인한 것만.</p>
+
+  <div class="opt">
+    <article>
+      <h4>VBV 를 1 프레임으로 고정</h4>
+      <p class="where">ApplyRateControlConfig</p>
+      <p>프리셋 기본 VBV 는 <strong>프리셋 자신의 비트레이트 기준</strong>으로 계산돼 있어서,
+      <code>averageBitRate</code> 만 덮어쓰면 둘이 어긋난 채 남는다. 저지연에서는 1 프레임 분량이 정석이다.</p>
+      <p>효과가 지연이 아니라 <strong>프레임 크기 분포</strong>에서 드러났다 — 최대/평균 비가 4.62 → 2.75.
+      큰 프레임은 전송이 늦어지므로 실제로는 네트워크 쪽 지연을 줄인다.</p>
+      <span class="gain">max/mean 4.62 → 2.75</span>
+    </article>
+
+    <article>
+      <h4>UltraLow 튜닝 + lowDelayKeyFrameScale = 1</h4>
+      <p class="where">ApplyInitOnlyConfig · ApplyRateControlConfig</p>
+      <p>CBR + 단일 프레임 VBV 에서 I 프레임이 P 프레임 대비 몇 배까지 비트를 쓸 수 있는지를
+      1 로 고정한다. <strong>키프레임도 예산을 넘기지 못하므로</strong> 키프레임 구간의 지연 스파이크가 사라진다.</p>
+      <p>대가가 있다. 처리량이 765 → 596 fps 로 떨어지고, IDR 이 한 프레임 예산에 갇히므로
+      <strong>비트레이트가 튀는 대신 그 프레임의 화질이 무너진다.</strong> 이 성질이 상위 계층의
+      "밀린 뷰어에게 IDR 을 요구하지 않는다" 정책의 근거가 됐다.</p>
+      <span class="gain">max/mean 2.75 → 1.13</span>
+    </article>
+
+    <article>
+      <h4>Intra refresh</h4>
+      <p class="where">ApplyInitOnlyConfig</p>
+      <p>주기적 IDR 대신 매 프레임의 일부 띠만 intra 로 인코딩해 60 프레임에 한 바퀴 돌린다.
+      600 프레임에서 키프레임 이벤트가 <strong>10 회 → 1 회</strong>로 줄었다.</p>
+      <p>SDK 제약이 까다로웠다 — <code>gopLength</code> 가 <code>NVENC_INFINITE_GOPLENGTH</code> 가 아니면
+      intra refresh 가 <strong>조용히 무시된다.</strong> <code>idrPeriod</code> 도 같이 무한으로 둬야 드라이버가
+      IDR 을 끼워넣지 않는다. 끄는 경우에도 <code>gopLength</code> 와 <code>idrPeriod</code> 를 일치시켜야 하는데,
+      다르면 <strong>IDR 만큼 크면서 진입점은 못 되는 I 프레임</strong>이 중간에 낀다.</p>
+      <span class="gain">키프레임 이벤트 10 → 1</span>
+    </article>
+
+    <article>
+      <h4>디바이스 분리 + 공유 텍스처 입력</h4>
+      <p class="where">RegisterSharedInputPool · StageFrameFromSharedSlot</p>
+      <p>캡처와 인코더가 같은 디바이스를 쓰면 게이트 하나를 두 스레드가 다툰다.
+      인코더가 그 게이트를 쥔 채 <code>nvEncMapInputResource</code> 안에서 드라이버 대기에 들어가면
+      캡처가 영원히 멈춘다. <strong>QHD 60fps 에서 실제로 교착했다.</strong></p>
+      <p>공유 핸들은 <code>RegisterSharedInputPool</code> 에서 <strong>한 번만</strong> 열어 둔다.
+      매 프레임 <code>OpenSharedResource1</code> 하는 것은 그 자체가 드라이버 왕복이다.
+      keyed mutex 를 잡고 있는 구간은 <code>CopyResource</code> + <code>Flush</code> 하나뿐이다.</p>
+      <span class="gain">교착 제거 · 게이트 경합 제거</span>
+    </article>
+
+    <article>
+      <h4>latest-only 유입 큐</h4>
+      <p class="where">EncodeFrameQueue</p>
+      <p>아직 처리되지 않은 프레임이 있으면 버리고 새 것으로 교체한다.
+      인코더가 밀렸을 때 <strong>오래된 화면을 내보내는 것보다 최신 화면을 내보내는 편이 낫다.</strong></p>
+      <p>이 성질 덕에 큐 깊이가 2 면 충분하다 — 어느 시점에도 QUEUED 1 + HELD 1 만 쓴다.
+      측정도 같았다: 60fps 에서 깊이 2/4/8 이 3.63~3.68 ms 로 무관했다.
+      버려진 프레임은 반납 콜백으로 앱에 돌아가 캡처 슬롯이 풀린다.</p>
+      <span class="gain">깊이 2 로 충분 · 지연 무관</span>
+    </article>
+
+    <article>
+      <h4>게이트 구간 최소화</h4>
+      <p class="where">ReadEncodedBitstream · OnPictureDisplay</p>
+      <p>완료 스레드가 게이트를 잡는 구간 중 가장 길었던 비트스트림 회수에서
+      게이트를 <strong>걷어냈다.</strong> 근거는 그 경로에 D3D11 리소스가 없다는 것 —
+      NVENC 자체 버퍼만 만진다.</p>
+      <p>디코더 쪽은 반대로 CUDA-D3D11 interop 구간이라 게이트가 필요하지만,
+      커널 실행과 memcpy 는 스트림에 얹는 <strong>비동기 명령</strong>이라 오래 잡지 않는다.</p>
+      <span class="gain">두 스레드 충돌 지점 제거</span>
+    </article>
+
+    <article>
+      <h4>버퍼 재사용과 캐시 라인 분리</h4>
+      <p class="where">패킷 버퍼 · 멤버 배치</p>
+      <p>비트스트림 패킷 버퍼는 <strong>모자랄 때만 키워</strong> 재사용한다. 프레임마다 할당하지 않는다.</p>
+      <p>멤버는 쓰기 주체에 따라 네 덩어리로 나눠 <code>alignas(64)</code> 로 띄웠다 —
+      투입 측(인코드 스레드), 완료 측(완료 스레드), 양쪽이 함께 쓰는 <code>m_pendingFrameCount</code>,
+      읽기 위주 플래그. 두 스레드가 매 프레임 같은 라인을 무효화하는 것을 막는다.</p>
+      <span class="gain">할당 0 · 캐시 라인 분리 실측 9.3배</span>
+    </article>
+
+    <article>
+      <h4>CAS 대신 ReadAcquire</h4>
+      <p class="where">슬롯 상태 · 시퀀스 읽기</p>
+      <p>원자 변수를 읽으려고 <code>InterlockedCompareExchange(&amp;v, 0, 0)</code> 를 쓰면
+      <code>lock cmpxchg</code> — 캐시 라인을 배타적으로 가져가는 RMW — 로 단순 읽기를 하게 된다.
+      x64 에서 <code>::ReadAcquire</code> 는 평범한 <code>mov</code> 다.</p>
+      <p>디코더의 <code>OnPictureDisplay</code> 는 프레임마다 시퀀스 두 개와 슬롯 상태를 읽는다.
+      읽기가 압도적으로 잦은 자리라 효과가 직접적이다.</p>
+      <span class="gain">읽기 1회당 14.03 사이클 절감 (19.6배)</span>
+    </article>
+  </div>
+
+  <h3>하지 않기로 한 최적화</h3>
+  <ul>
+    <li><strong>비트스트림 링버퍼 + 디스패치 스레드</strong> — 콜백 예산이 14 ms 나 남는 것을 확인하고 접었다.</li>
+    <li><strong>디코더 드레인을 한 반복 뒤로 미루기</strong> — 1 ms 아끼려고 16.7 ms 를 내는 거래다.</li>
+    <li><strong>인코더 게이트 획득 횟수 6 → 2~3 으로 병합</strong> — 한 번에 더 오래 잡게 되므로
+        지연이 렌더러 쪽으로 옮겨갈 뿐이다. 게이트가 재귀 불가라 범위를 넓히는 것 자체도 위험하다.
+        디바이스 분리가 올바른 해답이다.</li>
+  </ul>
+</section>
+
+<!-- ============================= NEW: 개선 전후 ============================= -->
+<section id="s8b">
+  <h2>개선 전후</h2>
+  <p class="sub">앞 절의 선택들이 실제로 무엇을 바꿨는가. 인코더 수치는 <code>NvEncodeBench</code> 기준선(RTX 5080 · Release · 1080p), 동기화 수치는 같은 머신에서 직접 측정.</p>
+
+  <h3>동기 → 비동기</h3>
+
+  <div class="chart">
+    <div class="chart-h">포화 처리량 <span>fps · 높을수록 좋음</span></div>
+    <p class="chart-note"><code>--fps 0</code> · 앞서 넣은 프레임이 전부 제출된 뒤 다음을 넣어 드롭 없는 상한을 잰다</p>
+
+    <div class="crow"><div class="lbl">동기 (StageFrame + EncodeSync) <em>(개선 전)</em></div>
+      <div class="track"><span class="bar before" style="width:81.5%"></span></div><div class="val">604</div></div>
+    <div class="crow win"><div class="lbl">비동기 (완료 스레드 분리)</div>
+      <div class="track"><span class="bar after" style="width:100%"></span></div><div class="val">741</div></div>
+
+    <div class="delta">처리량 <b>+22.7%</b> · 그런데 실동작점(60fps) 지연은 <b>3.691 → 3.682 ms</b> 로 동일하다
+      — 비동기가 산 것은 속도가 아니라 <b>여유</b>다</div>
+  </div>
+
+  <h3>슬롯 깊이 — 늘릴수록 안전하다는 직관의 반대</h3>
+
+  <div class="chart">
+    <div class="chart-h">포화 상태 지연 <span>p50 ms · 낮을수록 좋음</span></div>
+    <p class="chart-note">Little's Law: 지연 = 파이프라인 깊이 ÷ 처리량. 측정값이 계산값과 거의 일치한다</p>
+
+    <div class="crow"><div class="lbl">슬롯 8 <em>(계산 10.84)</em></div>
+      <div class="track"><span class="bar before" style="width:100%"></span></div><div class="val">10.29</div></div>
+    <div class="crow"><div class="lbl">슬롯 4 <em>(계산 5.44)</em></div>
+      <div class="track"><span class="bar before" style="width:49.4%"></span></div><div class="val">5.08</div></div>
+    <div class="crow win"><div class="lbl">슬롯 2 <em>(계산 2.70)</em></div>
+      <div class="track"><span class="bar after" style="width:24.7%"></span></div><div class="val">2.54</div></div>
+
+    <div class="delta"><b>4.05배 감소</b>, 그 대가로 잃은 처리량은 <b>0</b> (738 / 735 / 741 fps 로 평평)
+      — 저지연 목적이면 깊이 2 가 8 보다 명백히 낫다</div>
+  </div>
+
+  <h3>레이트 컨트롤 — 지연이 아니라 프레임 크기에서 드러났다</h3>
+  <p>
+    VBV·튜닝·intra refresh 를 하나씩 켜며 측정했는데 <strong>지연으로는 효과가 보이지 않았다.</strong>
+    프레임 크기 분포를 보고 나서야 무엇이 바뀌었는지 알 수 있었다.
+  </p>
+
+  <div class="chart">
+    <div class="chart-h">프레임 크기 균일도 <span>최대 ÷ 평균 · 1 에 가까울수록 고름</span></div>
+    <p class="chart-note">CBR 5 Mbps · 600 프레임 · 큰 프레임은 전송이 늦어져 그대로 지연이 된다</p>
+
+    <div class="crow"><div class="lbl">VBV 5프레임 + LOW_LATENCY <em>(개선 전)</em></div>
+      <div class="track"><span class="bar before" style="width:100%"></span></div><div class="val">4.62×</div></div>
+    <div class="crow"><div class="lbl">VBV 1프레임으로 축소</div>
+      <div class="track"><span class="bar before" style="width:59.5%"></span></div><div class="val">2.75×</div></div>
+    <div class="crow win"><div class="lbl">+ ULTRA_LOW (keyFrameScale 1)</div>
+      <div class="track"><span class="bar after" style="width:24.5%"></span></div><div class="val">1.13×</div></div>
+    <div class="crow"><div class="lbl">+ intra refresh <em>(최종 설정)</em></div>
+      <div class="track"><span class="bar after" style="width:40.9%"></span></div><div class="val">1.89×</div></div>
+
+    <div class="delta">p99 프레임 <b>39.4 → 9.9 KB</b> · 최종 설정이 1.13 이 아닌 1.89 인 것은
+      intra refresh 가 갱신 띠를 싣기 때문이다. 그 대신 다음 표를 얻는다</div>
+  </div>
+
+  <div class="chart">
+    <div class="chart-h">키프레임 이벤트 <span>600 프레임당 · 낮을수록 지연이 고름</span></div>
+    <p class="chart-note">IDR 은 P 프레임의 5~10배 크기라 주기마다 지연이 튄다</p>
+
+    <div class="crow"><div class="lbl">주기 IDR (60 프레임) <em>(개선 전)</em></div>
+      <div class="track"><span class="bar before" style="width:100%"></span></div><div class="val">10 회</div></div>
+    <div class="crow win"><div class="lbl">intra refresh</div>
+      <div class="track"><span class="bar after" style="width:10%"></span></div><div class="val">1 회</div></div>
+
+    <div class="delta">주기적 IDR 이 사라지고 <b>맨 앞 1 회</b>만 남는다 — 이후 IDR 은 신규 시청자가 붙을 때만</div>
+  </div>
+
+  <div class="chart">
+    <div class="chart-h">치른 대가 <span>포화 처리량 fps · 정직하게</span></div>
+    <p class="chart-note">균일도를 얻는 대신 처리량을 내줬다. 60fps 목표에는 여전히 10배 여유라 받아들인 거래다</p>
+
+    <div class="crow"><div class="lbl">LOW_LATENCY + 주기 IDR</div>
+      <div class="track"><span class="bar before" style="width:100%"></span></div><div class="val">765</div></div>
+    <div class="crow"><div class="lbl">ULTRA_LOW + intra refresh <em>(최종)</em></div>
+      <div class="track"><span class="bar after" style="width:76.9%"></span></div><div class="val">588</div></div>
+
+    <div class="delta"><b>−23.1%</b> · 그래도 60fps 대비 <b>9.8배</b> 여유다. 지연 균일성과 맞바꾼 것이 맞다고 판단했다</div>
+  </div>
+
+  <h3>인코딩 중 비트레이트 변경</h3>
+
+  <div class="chart">
+    <div class="chart-h">평균 패킷 크기 <span>KB · 12 Mbps → 2 Mbps 재설정</span></div>
+    <p class="chart-note">파이프라인을 멈추지 않고 <code>nvEncReconfigureEncoder</code> 로 적용 · 회귀 케이스 <code>reconfig/1</code></p>
+
+    <div class="crow"><div class="lbl">변경 전 (12 Mbps)</div>
+      <div class="track"><span class="bar before" style="width:100%"></span></div><div class="val">8.7</div></div>
+    <div class="crow win"><div class="lbl">변경 후 (2 Mbps)</div>
+      <div class="track"><span class="bar after" style="width:16.1%"></span></div><div class="val">1.4</div></div>
+
+    <div class="delta">전환 중 <b>프레임 유실 0</b> · 재생성 없이 6.2배 축소 — 네트워크 혼잡 대응이 화면 끊김 없이 된다</div>
+  </div>
+
+  <h3>락을 걷어낸 자리</h3>
+
+  <div class="chart">
+    <div class="chart-h">원자 변수 읽기 한 번 <span>CPU 사이클 · 낮을수록 좋음</span></div>
+    <p class="chart-note">32 논리 코어 · TSC 4.29 GHz · /O2 · 2억 회 반복 중 최소값</p>
+
+    <div class="crow"><div class="lbl"><code>InterlockedCompareExchange(&amp;v,0,0)</code> <em>(개선 전)</em></div>
+      <div class="track"><span class="bar before" style="width:100%"></span></div><div class="val">14.78</div></div>
+    <div class="crow win"><div class="lbl"><code>ReadAcquire(&amp;v)</code></div>
+      <div class="track"><span class="bar after" style="width:5.1%"></span></div><div class="val">0.76</div></div>
+
+    <div class="delta">읽기 1회당 <b>14.03 사이클 절감</b> (19.6배) · 처리량 290 → 5,684 Mops/s ·
+      경합 시(쓰기1+읽기3) 64.9 → 3,249.1 M/s 로 <b>50배</b></div>
+  </div>
+
+  <div class="chart">
+    <div class="chart-h">캐시 라인 분리 <span>M increments/s · 4 스레드 / 4 카운터</span></div>
+    <p class="chart-note">제출 측과 완료 측 카운터를 <code>alignas(64)</code> 로 갈라 둔 근거</p>
+
+    <div class="crow"><div class="lbl">한 캐시 라인에 몰아둠 <em>(개선 전)</em></div>
+      <div class="track"><span class="bar before" style="width:10.8%"></span></div><div class="val">120.0</div></div>
+    <div class="crow win"><div class="lbl"><code>alignas(64)</code> 로 분리</div>
+      <div class="track"><span class="bar after" style="width:100%"></span></div><div class="val">1,113.2</div></div>
+
+    <div class="delta"><b>9.3배</b> — 두 스레드가 매 프레임 같은 라인을 무효화하던 것이 사라진다</div>
+  </div>
+
+  <div class="note">
+    <span class="lbl">정직하게 — 자릿수를 구분해서</span>
+    <p>동기화 배수들은 <strong>해당 연산만 떼어낸 비율</strong>이다. 프레임 예산에 환산하면 작다 —
+    원자 읽기는 프레임당 십수 회이므로 약 <strong>210 사이클, 49 ns</strong>,
+    16.7 ms 예산의 <strong>0.0003%</strong> 다.</p>
+    <p>이 파이프라인의 지연 3.7 ms 를 실제로 움직인 것은 <strong>슬롯 깊이(10.29 → 2.54 ms)</strong> 와
+    <strong>프레임 크기 균일화</strong> 다. 그리고 남은 가장 큰 변수는 코드가 아니라
+    <strong>게이트 경합(3.66 → 17.49 ms)</strong> 과 <strong>GPU 전력 상태(1.92 → 8.11 ms)</strong> —
+    둘 다 <a href="#s7">지연의 구조</a>에 있다.</p>
+  </div>
+</section>
+
+<!-- ============================= 9 ============================= -->
+<section id="s9">
+  <h2>예외와 장애 처리</h2>
+  <p class="sub">프레임 한 장을 잃는 것과 세션을 포기하는 것을 엄격히 구분한다.</p>
+
+  <h3>인코더</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>오류</th><th>원인</th><th>처리</th><th>복구</th></tr></thead>
+      <tbody>
+        <tr><td><code>OutputReadFailed</code></td><td><code>nvEncLockBitstream</code> 실패</td>
+            <td>프레임 1장 폐기, 슬롯은 회수</td><td><span class="tag t-ok">계속 진행</span></td></tr>
+        <tr><td><code>OutputTimeout</code></td><td>완료 이벤트 20초 미신호</td>
+            <td>NVENC 가 입력 리소스를 쥐고 있어 Unmap 도 재사용도 불가</td><td><span class="tag t-bad">세션 포기</span></td></tr>
+        <tr><td><code>OutputUnmapFailed</code></td><td><code>nvEncUnmapInputResource</code> 실패</td>
+            <td>매핑이 슬롯에 누적된다</td><td><span class="tag t-bad">세션 포기</span></td></tr>
+        <tr><td><code>SlotRingCorrupted</code></td><td>pending &gt; 0 인데 슬롯이 submitted 가 아님</td>
+            <td>어느 슬롯을 회수할지 알 수 없다</td><td><span class="tag t-bad">세션 포기</span></td></tr>
+        <tr><td><code>EncoderFaulted</code></td><td>유실 8 회 연속</td>
+            <td>세션이 살아있다고 볼 수 없다</td><td><span class="tag t-bad">세션 포기</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>디코더</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>오류</th><th>원인</th><th>처리</th><th>복구</th></tr></thead>
+      <tbody>
+        <tr><td><code>OutputPoolExhausted</code></td><td>앱이 슬롯을 반납하지 않음</td>
+            <td>덮어쓰지 않고 프레임 폐기</td><td><span class="tag t-warn">앱 버그 신호</span></td></tr>
+        <tr><td><code>OutputNotConsumed</code></td><td>앱이 못 따라감</td>
+            <td>최신 쪽으로 점프</td><td><span class="tag t-ok">정상 정책</span></td></tr>
+        <tr><td><code>ParseFailed</code></td><td>비트스트림 손상</td>
+            <td>유실 1 로 세고 계속</td><td><span class="tag t-ok">계속 진행</span></td></tr>
+        <tr><td><code>DisplayFailed</code></td><td>CUDA 변환/복사 실패</td>
+            <td>프레임 폐기</td><td><span class="tag t-ok">계속 진행</span></td></tr>
+        <tr><td><code>ReconfigureFailed</code></td><td>해상도 변경 처리 실패</td>
+            <td>—</td><td><span class="tag t-bad">세션 포기</span></td></tr>
+        <tr><td><code>DecoderFaulted</code></td><td>유실 32 회 연속</td>
+            <td>—</td><td><span class="tag t-bad">세션 포기</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>원칙 셋</h3>
+  <ol>
+    <li><strong>단발성 유실로 스레드를 끝내지 않는다.</strong> 완료 스레드가 한 번의 실패로 종료하면
+        파이프라인이 <strong>조용히 영구 정지</strong>한다. 유실은 흘려보내고 연속 누적될 때만 포기한다.</li>
+    <li><strong>포기할 때도 대기자를 풀어 준다.</strong> <code>AbortPendingFrames</code> 는 Unmap 을 시도하지 않고
+        (NVENC 가 아직 슬롯을 쥐고 있을 수 있다) 장부만 비운 뒤 <code>allSlotsFreeEvent</code> 를 세운다.
+        그래야 종료가 20초 타임아웃에 매달리지 않는다.</li>
+    <li><strong>지원하지 않는 조합은 빨리 실패한다.</strong> <code>EncodeThread</code> 는 동기 모드 인코더를
+        거절한다 — 아무도 출력을 회수하지 않아 pending 이 차오른 뒤 조용히 멈추기 때문이다.
+        이유를 로그에 적고 <code>false</code> 를 돌려준다.</li>
+  </ol>
+</section>
+
+<!-- ============================= 10 ============================= -->
+<section id="s10">
+  <h2>검증과 관측성</h2>
+  <p class="sub">전용 하네스를 먼저 만들었다. 이 문서의 모든 숫자가 거기서 나왔다.</p>
+
+  <h3>회귀 케이스 18 건 — 전부 실제 GPU 인코딩을 거친다</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>케이스</th><th>검증 내용</th></tr></thead>
+      <tbody>
+        <tr><td><code>Bug A</code> ×2</td><td>단발 출력 실패는 프레임 1장만 버리고 계속 돈다 / 연속 누적되면 조용히 얼지 않고 <code>EncoderFaulted</code> 를 통지하고 pending 을 비운다</td></tr>
+        <tr><td><code>Bug B</code></td><td>큐를 Shutdown 후 다시 Initialize 할 수 있고, Shutdown 이 남은 프레임을 생산자에게 반납한다</td></tr>
+        <tr><td><code>Bug C</code></td><td>종료 시 in-flight 프레임이 전부 드레인되어 submitted == completed, 유실 0</td></tr>
+        <tr><td><code>Bug D</code></td><td>슬롯 수가 2의 n승이 아니면 초기화 단계에서 거절</td></tr>
+        <tr><td><code>gate</code></td><td>Initialize / Destroy 가 게이트를 <strong>재귀 획득하지 않는다</strong> (실제 게이트는 SRWLOCK Exclusive 라 재귀 시 데드락)</td></tr>
+        <tr><td><code>reconfig</code> ×2</td><td>인코딩 중 12→2 Mbps 변경이 멈춤 없이 반영(평균 8.7→1.4 KB, 유실 0) / [init] 필드 변경은 거절되고 <strong>부분 적용이 남지 않는다</strong></td></tr>
+        <tr><td><code>dec/timestamp</code></td><td>Parse 에 넘긴 timestamp 가 NVDEC 를 통과해 돌아온다 (예전엔 플래그만 세우고 값을 안 넣어 늘 0 이었다)</td></tr>
+        <tr><td><code>dec/pool</code></td><td>앱이 슬롯보다 많이 붙잡으면 덮어쓰지 않고 버리고, 이어지면 <code>DecoderFaulted</code></td></tr>
+        <tr><td><code>dec/gate</code></td><td>게이트 경합(120Hz × 3ms) 아래에서도 재귀 0, 유실 0 — 지연만 늘고 프레임은 안 잃는다</td></tr>
+        <tr><td><code>repeat</code> ×2</td><td>같은 디바이스로 세션을 반복 개폐해도 매번 전 프레임이 처리된다</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    디코더 케이스는 <strong>인코더가 만든 실제 H.264 비트스트림</strong>을 그대로 먹인다.
+    테스트용 스트림 파일이 필요 없고, 인코더 변경이 디코더를 깨뜨리면 바로 드러난다.
+  </p>
+
+  <h3>장애를 재현하는 훅</h3>
+  <p>
+    <code>DebugFailNextOutputs(n)</code> 은 다음 <em>n</em> 번의 비트스트림 회수를 강제로 실패시킨다.
+    <strong>복구 경로는 재현할 수 없으면 검증할 수 없다</strong>는 이유로 넣었다.
+    실제로 이 훅으로 "3회 복구 후 4회째 상한 도달" 까지 상위 앱에서 확인했다.
+  </p>
+
+  <h3>통계</h3>
+<pre><b>NvEncStats</b>   submitted / completed / lost / pending / faulted
+             dequeued / droppedInputQueue / droppedNoEncoderSlot
+             droppedPrepareFailed / droppedSubmitFailed
+
+<b>NvDecStats</b>   parsed / dequeued / droppedInputQueue / packetsFailed
+             decoded / delivered
+             droppedPoolExhausted / droppedNotConsumed / droppedDisplayFailed
+             framesHeldByApp / faulted
+</pre>
+  <p>
+    드롭 카운터를 <strong>발생 단계별로 나눈 것</strong>이 핵심이다. "프레임을 잃었다" 는 사실 하나로는
+    유입 큐가 밀린 것인지, 인코더 슬롯이 없는 것인지, 변환이 실패한 것인지 구분할 수 없다.
+    <code>parsed == decoded == delivered</code> 가 성립하는지 한 줄로 보이는 것도 같은 이유다.
+  </p>
+</section>
+
+<!-- ============================= 11 ============================= -->
+<section id="s11">
+  <h2>트레이드오프와 한계</h2>
+  <p class="sub">고르지 않은 것들, 그리고 남은 것.</p>
+
+  <h3>의도적으로 포기한 것</h3>
+  <ul>
+    <li><strong>B 프레임 / lookahead</strong> — 슬롯 하나 = 출력 하나 가정이 깨진다.
+        지원하려면 "출력 없는 제출" 을 표현하는 모델이 먼저 필요하다. 저지연 용도에선 어차피 쓰지 않는다.</li>
+    <li><strong>H.265 / AV1</strong> — H.264 고정이다. 코덱 선택을 설정으로 빼는 대신
+        <strong>한 코덱에서 VUI·GOP·VBV 를 정확히 맞추는 쪽</strong>에 시간을 썼다.</li>
+    <li><strong>프레임 순서 보장</strong> — 유입 큐가 latest-only 다. 밀리면 중간 프레임이 사라진다.
+        녹화용이라면 큐 정책을 바꿔야 한다.</li>
+    <li><strong>디코더 런타임 재설정</strong> — 디코더는 해상도를 스트림에서 읽으므로 설정할 것이 없다.
+        해상도 변경은 <code>OnVideoSequence</code> 에서 자동 처리한다.</li>
+  </ul>
+
+  <h3>남아 있는 것</h3>
+  <ul>
+    <li><strong>클라이언트 쪽 게이트 경합</strong> — 렌더와 디코드가 같은 디바이스를 쓴다.
+        서버처럼 분리하면 해결되지만, 디코더 출력을 렌더러가 바로 써야 해서 구조가 더 복잡하다.</li>
+    <li><strong>인코더 <code>Faulted</code> 에서 자력 복구 불가</strong> — 상위 앱이 Destroy/Initialize 로
+        재생성한다. 그쪽에 재생성 횟수 상한(60초에 3회)을 둬서 무한 재생성 루프를 막았다.</li>
+    <li><strong>프레임당 풀프레임 복사 1회</strong> — 공유 텍스처 → BGRA 슬롯 복사(1080p 기준 8.3 MB).
+        대역폭이 병목인 다운클럭 상태에서 특히 아깝다. 제거하려면 NVENC 가 공유 텍스처를
+        직접 등록할 수 있어야 하는데, keyed mutex 보유 구간이 인코딩 전체로 늘어나
+        <strong>애초에 없애려던 교착이 돌아온다.</strong></li>
+  </ul>
+
+  <h3>이 모듈에서 얻은 것</h3>
+  <p>
+    가장 크게 배운 것은 <strong>측정 하네스를 먼저 만드는 것의 값어치</strong>였다.
+    "버퍼를 늘리면 안전하다", "sync 가 더 빠르다", "콜백이 무거우면 디스패치 스레드가 필요하다"
+    — 셋 다 그럴듯했고 셋 다 틀렸다. 숫자를 보지 않았다면 세 가지 최적화를 <strong>전부
+    잘못된 방향으로</strong> 했을 것이다.
+  </p>
+  <p>
+    두 번째는 <strong>실패의 등급을 나누는 일</strong>이다. 프레임 한 장 유실과 세션 포기를 같은 코드로 다루면,
+    복구 가능한 상황에서 죽거나 복구 불가능한 상황에서 조용히 얼어붙는다.
+    둘을 나누는 기준을 <em>"슬롯을 안전하게 회수할 수 있는가"</em> 하나로 정한 뒤에야
+    모든 실패 경로가 제자리를 찾았다.
+  </p>
+</section>
+
+</main>
+</div>
+
+<footer>
+  <div class="wrap">
+    NvCodec · 기술 자료 · 측정 기준선 RTX 5080 / Release / 1080p ·
+    관련 문서 <code>docs/encode-pipeline.html</code>, <code>NvEncodeBench/README.md</code>
+  </div>
+</footer>
+
+</body>
+</html>

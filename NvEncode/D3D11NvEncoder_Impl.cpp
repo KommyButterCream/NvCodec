@@ -1817,22 +1817,36 @@ bool D3D11NvEncoder_Impl::ReadEncodedBitstream(uint32_t slot, NvEncPacket& packe
 
 	// Encode Result 를 가져오기 위해 NVENC 내부 Bitstream Buffer Lock
 	//
-	// 여기서는 컨텍스트 게이트를 잡지 않는다.
+	// Lock / Unlock 호출은 컨텍스트 게이트 안에서 한다.
 	//
-	// 이 함수가 만지는 것은 CreateBitstreamBuffers 가 nvEncCreateBitstreamBuffer
-	// 로 받아 둔 NVENC 자체 버퍼뿐이다. 등록된 D3D11 리소스는 호출 경로에
-	// 등장하지 않으므로 immediate context 와 무관하다.
-	// (D3D11 리소스를 건드리는 UnmapInputResource 는 그래서 게이트를 유지한다)
+	// 예전에는 여기서 게이트를 잡지 않았다. 이 함수가 만지는 것은
+	// nvEncCreateBitstreamBuffer 로 받아 둔 NVENC 자체 버퍼뿐이니 immediate
+	// context 와 무관하다고 봤다. 틀렸다 — 드라이버는 nvEncLockBitstream 안에서
+	// 이 디바이스의 immediate context 를 쓴다(ID3D11DeviceContext::DecoderExtension).
+	// 엔코드 스레드가 같은 순간 CopyResource / VideoProcessorBlt / EncodePicture
+	// 를 돌리면 두 스레드가 한 컨텍스트에 동시에 들어간다. 디버그 레이어는 이걸
+	// CORRUPTED_MULTITHREADING 으로 잡고 예외 0x87D 로 프로세스를 죽였고
+	// (디버그 빌드 서버의 간헐 크래시), 릴리스 빌드에서는 조용히 메모리를 깬다.
 	//
-	// 게이트를 잡으면 이 구간 전체 — 패킷 memcpy 까지 — 가 엔코드 스레드의
-	// 다음 CopyResource 를 막는다. 완료 스레드가 게이트를 잡는 구간 중
-	// 가장 길어서, 두 스레드가 실제로 부딪히는 곳이 여기였다.
+	// 게이트를 잡는 구간은 NVENC 호출 둘뿐이다. 그 사이의 재할당과 패킷
+	// memcpy 는 게이트 밖에 둔다 — 그걸 게이트 안에 넣으면 엔코드 스레드의
+	// 다음 CopyResource 를 막는다.
+	//
+	// 게이트 안에서 오래 막히지는 않는다. 비동기 경로는 완료 이벤트를 기다린
+	// 뒤에 여기 오므로 Lock 이 기다릴 것이 없다. 동기 경로는 호출 스레드가
+	// 엔코드 스레드 자신이라 막아서 문제 될 상대가 없다.
 
 	NV_ENC_LOCK_BITSTREAM lockBitstreamData = {};
 	lockBitstreamData.version = NV_ENC_LOCK_BITSTREAM_VER;
 	lockBitstreamData.outputBitstream = m_bitstreamBuffers[slot];
 	lockBitstreamData.doNotWait = false;
-	if (!NVENC_API_CALL(m_nvenc.nvEncLockBitstream(m_encoderHandle, &lockBitstreamData)))
+
+	bool locked = false;
+	{
+		D3D11ImmediateContextGuard contextGuard(m_contextGate);
+		locked = NVENC_API_CALL(m_nvenc.nvEncLockBitstream(m_encoderHandle, &lockBitstreamData));
+	}
+	if (!locked)
 		return false;
 
 	// Bitstream Result 를 저장할 슬롯 버퍼 획득
@@ -1848,6 +1862,8 @@ bool D3D11NvEncoder_Impl::ReadEncodedBitstream(uint32_t slot, NvEncPacket& packe
 		{
 			packetBuffer.streamDataCapacity = 0;
 			packetBuffer.streamDataSize = 0;
+
+			D3D11ImmediateContextGuard contextGuard(m_contextGate);
 			NVENC_API_CALL(m_nvenc.nvEncUnlockBitstream(m_encoderHandle, lockBitstreamData.outputBitstream));
 			return false;
 		}
@@ -1869,7 +1885,8 @@ bool D3D11NvEncoder_Impl::ReadEncodedBitstream(uint32_t slot, NvEncPacket& packe
 	packet.frameType = static_cast<uint16_t>(packetBuffer.pictureType);
 	packet.isKeyFrame = packetBuffer.isKeyFrame;
 
-	// Bitstream Buffer Unlock
+	// Bitstream Buffer Unlock (Lock 과 같은 이유로 게이트 안에서)
+	D3D11ImmediateContextGuard contextGuard(m_contextGate);
 	return NVENC_API_CALL(m_nvenc.nvEncUnlockBitstream(m_encoderHandle, lockBitstreamData.outputBitstream));
 }
 

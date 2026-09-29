@@ -863,15 +863,25 @@ inputQueue.<b>ReleaseReadPacket</b>()                  <i>원본은 여기서 �
     지연을 낮추고 싶으면 우연한 스로틀에 기대는 대신 <code>encodeSlotCount</code> 를 줄이는 것이 맞다.
   </p>
 
-  <h3>비트스트림 회수에서 게이트를 잡지 않는다</h3>
+  <h3>비트스트림 회수: 게이트는 NVENC 호출에만</h3>
   <p>
-    <code>ReadEncodedBitstream</code> 이 만지는 것은 <code>nvEncCreateBitstreamBuffer</code> 로 받아 둔
-    <strong>NVENC 자체 버퍼뿐</strong>이다. 등록된 D3D11 리소스가 호출 경로에 없으므로 immediate context
-    와 무관하다. 반면 D3D11 리소스를 건드리는 <code>UnmapInputResource</code> 는 게이트를 유지한다.
+    한때 <code>ReadEncodedBitstream</code> 에서 게이트를 통째로 걷어냈다. 이 함수가 만지는 것은
+    <code>nvEncCreateBitstreamBuffer</code> 로 받아 둔 NVENC 자체 버퍼뿐이고 등록된 D3D11 리소스가
+    호출 경로에 없으니 immediate context 와 무관하다고 봤다. <strong>틀린 판단이었다.</strong>
   </p>
   <p>
-    이 구간은 패킷 <code>memcpy</code> 까지 포함해서 완료 스레드가 게이트를 잡는 구간 중 가장 길었고,
-    <strong>두 스레드가 실제로 부딪히는 자리가 여기였다.</strong> 근거를 확인하고 게이트를 걷어냈다.
+    디버그 빌드 서버가 스트리밍 중 간헐적으로 죽었다(예외 <code>0x87D</code>, 수 회에 한 번).
+    예외를 잡는 진단 핸들러로 스택을 받아 보니 완료 스레드의 <code>nvEncLockBitstream</code> 안에서
+    드라이버가 <code>ID3D11DeviceContext::DecoderExtension</code> 을 부르고 있었고, 같은 순간
+    엔코드 스레드도 그 컨텍스트를 쓰고 있었다. 디버그 레이어의 CORRUPTED_MULTITHREADING 이다.
+    NVENC 가 D3D11 디바이스를 받으면 <strong>자기 버퍼만 만지는 것처럼 보이는 호출도
+    그 디바이스의 컨텍스트를 쓴다.</strong> 릴리스 빌드였다면 죽지 않고 조용히 메모리를 깼을 것이다.
+  </p>
+  <p>
+    그래서 <code>nvEncLockBitstream</code> / <code>nvEncUnlockBitstream</code> 호출은 게이트 안으로
+    되돌렸다. 원래 걷어낸 이유 — 이 구간이 가장 길다 — 는 호출 사이의 재할당과 패킷
+    <code>memcpy</code> 때문이었으므로 그것들은 게이트 밖에 남겼다. 비동기 경로는 완료 이벤트를
+    기다린 뒤에 Lock 하므로 게이트 안에서 기다릴 일도 없다.
   </p>
 
   <h3>B 프레임을 지원하지 않는다고 명시한다</h3>
@@ -1239,11 +1249,12 @@ outputFrames[slot].timestamp = displayInfo-&gt;timestamp;
       <h4>게이트 구간 최소화</h4>
       <p class="where">ReadEncodedBitstream · OnPictureDisplay</p>
       <p>완료 스레드가 게이트를 잡는 구간 중 가장 길었던 비트스트림 회수에서
-      게이트를 <strong>걷어냈다.</strong> 근거는 그 경로에 D3D11 리소스가 없다는 것 —
-      NVENC 자체 버퍼만 만진다.</p>
+      게이트를 <strong>NVENC 호출 두 개로 좁혔다.</strong> 재할당과 패킷 memcpy 는 게이트 밖이다.
+      통째로 걷어냈던 적이 있는데, 드라이버가 Lock 안에서 컨텍스트를 써서
+      디버그 레이어가 멀티스레드 충돌로 프로세스를 죽였다.</p>
       <p>디코더 쪽은 반대로 CUDA-D3D11 interop 구간이라 게이트가 필요하지만,
       커널 실행과 memcpy 는 스트림에 얹는 <strong>비동기 명령</strong>이라 오래 잡지 않는다.</p>
-      <span class="gain">두 스레드 충돌 지점 제거</span>
+      <span class="gain">게이트는 짧게 · 호출은 빠짐없이</span>
     </article>
 
     <article>

@@ -190,9 +190,6 @@ bool D3D11NvEncoder_Impl::Initialize(
 	::InterlockedExchange(&m_forceKeyFrame, FALSE);
 	::InterlockedExchange(&m_acceptingFrames, FALSE);
 
-	// 재초기화면 앞서 등록된 공유 풀은 무효다. RegisterSharedInputPool 을
-	// 다시 불러야 한다.
-	UnregisterSharedInputPool();
 	::InterlockedExchange(&m_faulted, FALSE);
 	::InterlockedExchange(&m_debugFailOutputCount, 0);
 	::InterlockedExchange64(&m_submittedFrameCount, 0);
@@ -1136,6 +1133,10 @@ void D3D11NvEncoder_Impl::Destroy()
 		DestroyCompletionEvents();
 		DestroyBGRAToNV12Converter();
 		DestroyEncoder();
+
+		// 공유 입력도 이 디바이스의 COM 참조를 소유한다. 모든 GPU 소비자를
+		// 정리한 뒤 텍스처와 keyed mutex 를 함께 놓아야 디바이스도 해제된다.
+		UnregisterSharedInputPool();
 	}
 
 	// 파이프라인 이벤트는 위의 모든 스레드가 정지한 뒤에 닫는다.
@@ -1273,6 +1274,9 @@ bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, u
 		return false;
 	}
 
+	// 중간 슬롯에서 실패해도 이미 연 리소스를 정리할 수 있도록 먼저 설정한다.
+	// 배열은 nullptr 로 초기화되어 아직 열지 않은 슬롯도 안전하게 정리된다.
+	m_sharedInputCount = count;
 	for (uint32_t i = 0; i < count; ++i)
 	{
 		if (!sharedHandles[i])
@@ -1309,7 +1313,6 @@ bool D3D11NvEncoder_Impl::RegisterSharedInputPool(const HANDLE* sharedHandles, u
 	}
 
 	device1->Release();
-	m_sharedInputCount = count;
 
 	printf_s("[NVENC] shared input pool registered : %u slots\n", count);
 	return true;

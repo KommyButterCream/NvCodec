@@ -105,6 +105,10 @@ public:
 	// =====================================================================
 	Frame* AcquireFrame();
 	void ReleaseFrame(Frame* frame);
+	// Retain only an acquired frame (e.g. inside FrameCallback). Release once per retain.
+	// All retained frames must be released before Destroy; reconfiguration waits for them.
+	bool RetainFrame(const Frame& frame);
+	bool GetSharedOutputPool(D3D11NvDecoder::SharedOutputPool& pool) const;
 
 	// =====================================================================
 	// 통계 / 상태 조회
@@ -184,6 +188,8 @@ private:
 	uint32_t m_outputSlotCount = 0;
 	CUevent m_decodeCompleteEvents[kMaxOutputSlotCount] = {};
 	ID3D11Texture2D* m_outputTextures[kMaxOutputSlotCount] = {};
+	IDXGIKeyedMutex* m_outputKeyedMutexes[kMaxOutputSlotCount] = {};
+	uint64_t m_outputPoolGeneration = 0;
 	CUgraphicsResource m_cudaOutputResources[kMaxOutputSlotCount] = {};
 	CUdeviceptr m_bgraStagingBuffers[kMaxOutputSlotCount] = {};
 	Frame m_outputFrames[kMaxOutputSlotCount] = {};
@@ -230,6 +236,8 @@ private:
 	// 소비 측 — AcquireFrame / ReleaseFrame 이 쓴다
 	// =====================================================================
 	alignas(64) volatile LONG m_outputSequence = 0;
+	SRWLOCK m_leaseLock = SRWLOCK_INIT;
+	CONDITION_VARIABLE m_leaseChanged = CONDITION_VARIABLE_INIT;
 	volatile LONG m_framesHeldByApp = 0;
 	volatile LONG64 m_deliveredFrameCount = 0;
 

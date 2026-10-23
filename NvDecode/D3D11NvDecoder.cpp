@@ -131,3 +131,13 @@ bool D3D11NvDecoder::IsFaulted() const
 {
 	return m_impl->IsFaulted();
 }
+
+bool D3D11NvDecoder::GetSharedOutputPool(SharedOutputPool& pool) const
+{
+	return m_impl->GetSharedOutputPool(pool);
+}
+
+bool D3D11NvDecoder::RetainFrame(const Frame& frame)
+{
+	return m_impl && m_impl->RetainFrame(frame);
+}

@@ -75,6 +75,10 @@ struct NvDecConfig
 	// 출력 텍스처를 공유 텍스처로 만든다. 다른 D3D11 디바이스에서 열어 쓸 때.
 	bool sharedOutputTextureMode = false;
 
+	// Legacy shared handle + KeyedMutex. Requires sharedOutputTextureMode.
+	// NT handles are not compatible with the current CUDA graphics registration.
+	bool sharedOutputKeyedMutex = false;
+
 	// 앱이 프레임을 못 따라갈 때 몇 장까지 밀리도록 둘지.
 	// 이보다 밀리면 최신 프레임으로 건너뛴다(라이브 영상은 최신이 중요하다).
 	// 건너뛴 수는 droppedNotConsumed 로 집계된다.

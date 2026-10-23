@@ -33,16 +33,30 @@ public:
 		HANDLE sharedHandle = nullptr;
 		uint64_t timestamp = 0;
 
-		// 내부 슬롯 식별자. 해석하지 말고 ReleaseFrame 에 그대로 넘긴다.
+		// 출력 풀의 슬롯 번호. 풀 등록 소비자에는 poolGeneration과 함께 전달한다.
+		// Frame 포인터 자체는 ReleaseFrame에 그대로 반환해야 한다.
 		uint32_t slot = 0;
+
+		// Changes whenever output textures are recreated.
+		uint64_t poolGeneration = 0;
 	};
+
+	// Borrowed legacy handles; query only from the frame callback or while parsing is stopped.
+	// A registered consumer must replace its pool when generation changes.
+	struct SharedOutputPool
+	{
+		uint32_t count = 0;
+		uint64_t generation = 0;
+		HANDLE handles[32] = {};
+	};
+	bool GetSharedOutputPool(SharedOutputPool& pool) const;
 
 	using ErrorCallback = void (*)(NvDecErrorCode errorCode, void* userData);
 
 	// 디코드 스레드가 프레임 하나를 완성할 때마다 부른다.
 	// frame 은 콜백이 반환할 때까지만 유효하다 — 스레드가 곧바로 반납한다.
-	// 텍스처를 콜백 밖으로 들고 나가려면 이 스레드를 쓰지 말고
-	// AcquireFrame / ReleaseFrame 을 직접 호출해야 한다.
+	// 콜백 밖에서도 프레임을 유지하려면 반환 전에 RetainFrame을 호출하고,
+	// 비동기 소비 완료 또는 폐기 시 유지한 참조마다 ReleaseFrame으로 반납한다.
 	using FrameCallback = void (*)(const Frame& frame, void* userData);
 
 	// =====================================================================
@@ -125,6 +139,9 @@ public:
 
 	// AcquireFrame 으로 받은 프레임을 반납한다. 슬롯이 다시 쓰인다.
 	void ReleaseFrame(Frame* frame);
+	// Retain only an acquired frame (e.g. inside FrameCallback). Release once per retain.
+	// All retained frames must be released before Destroy; reconfiguration waits for them.
+	bool RetainFrame(const Frame& frame);
 
 	// =====================================================================
 	// 통계 / 상태 조회

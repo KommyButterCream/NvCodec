@@ -187,6 +187,11 @@ bool D3D11NvDecoder_Impl::Initialize(
 		return false;
 	}
 
+	if (config.sharedOutputKeyedMutex && !config.sharedOutputTextureMode)
+	{
+		return false;
+	}
+
 	if (config.maxDecodeSurfaces == 0)
 	{
 		printf_s("[NVDEC ERROR] maxDecodeSurfaces must be non-zero.\n");
@@ -404,7 +409,9 @@ bool D3D11NvDecoder_Impl::CreateOutputSlots()
 		desc.SampleDesc.Count = 1;
 		desc.Usage = D3D11_USAGE_DEFAULT;
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		desc.MiscFlags = m_userConfig.sharedOutputTextureMode ? D3D11_RESOURCE_MISC_SHARED : 0;
+		desc.MiscFlags = m_userConfig.sharedOutputTextureMode
+			? (m_userConfig.sharedOutputKeyedMutex ? D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX : D3D11_RESOURCE_MISC_SHARED)
+			: 0;
 
 		// CreateTexture2D 는 디바이스 호출이라 스레드 세이프하다.
 		HRESULT hr = m_D3D11Device->CreateTexture2D(&desc, nullptr, &m_outputTextures[slot]);
@@ -436,6 +443,17 @@ bool D3D11NvDecoder_Impl::CreateOutputSlots()
 			}
 		}
 
+		if (m_userConfig.sharedOutputKeyedMutex)
+		{
+			hr = m_outputTextures[slot]->QueryInterface(__uuidof(IDXGIKeyedMutex),
+				reinterpret_cast<void**>(&m_outputKeyedMutexes[slot]));
+			if (FAILED(hr))
+			{
+				DestroyOutputSlots();
+				return false;
+			}
+		}
+
 		// CUDA interop 등록은 D3D11 리소스를 만진다. 게이트 안에서 처리한다.
 		// 실패 정리(DestroyOutputSlots)가 스스로 게이트를 잡으므로
 		// 이 범위를 벗어난 뒤에 호출해야 중첩 획득을 피할 수 있다.
@@ -459,11 +477,19 @@ bool D3D11NvDecoder_Impl::CreateOutputSlots()
 		m_outputFrames[slot].slot = slot;
 	}
 
+	++m_outputPoolGeneration;
+	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+		m_outputFrames[slot].poolGeneration = m_outputPoolGeneration;
 	return true;
 }
 
 void D3D11NvDecoder_Impl::DestroyOutputSlots()
 {
+	// Never destroy a generation while an asynchronous consumer owns a slot.
+	::AcquireSRWLockExclusive(&m_leaseLock);
+	while (::ReadAcquire(&m_framesHeldByApp) > 0)
+		::SleepConditionVariableSRW(&m_leaseChanged, &m_leaseLock, INFINITE, 0);
+	::ReleaseSRWLockExclusive(&m_leaseLock);
 	// 생성 순서와 반대로 해제한다.
 	// cuGraphicsUnregisterResource 는 D3D11 리소스를 만지므로 게이트가 필요하다.
 	// 호출자가 게이트를 잡은 상태로 부르면 안 된다(재귀 획득 불가).
@@ -475,6 +501,12 @@ void D3D11NvDecoder_Impl::DestroyOutputSlots()
 		{
 			CUDA_DRVAPI_CALL(cuGraphicsUnregisterResource(m_cudaOutputResources[slot]));
 			m_cudaOutputResources[slot] = nullptr;
+		}
+
+		if (m_outputKeyedMutexes[slot])
+		{
+			m_outputKeyedMutexes[slot]->Release();
+			m_outputKeyedMutexes[slot] = nullptr;
 		}
 
 		if (m_outputTextures[slot])
@@ -585,7 +617,7 @@ void D3D11NvDecoder_Impl::Destroy()
 		// 앱이 아직 들고 있는 텍스처를 여기서 해제한다.
 		// 앱이 쥔 포인터가 무효해지므로 조용히 넘어가지 않고 알린다.
 		printf_s("[NVDEC WARNING] Destroying while the app still holds %ld frame(s)."
-			" Their textures become invalid.\n", heldByApp);
+			" Waiting for retained frames to be returned.\n", heldByApp);
 	}
 
 	if (m_cudaContext)
@@ -1146,6 +1178,8 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	int32_t result = 1;
 	bool mappedVideoFrame = false;
 	bool mappedGraphicsResource = false;
+	bool keyedMutexHeld = false;
+	bool frameReady = false;
 	uint32_t slot = 0;
 	LONG currentWrite = 0;
 	LONG currentRead = 0;
@@ -1192,6 +1226,22 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 		NVDEC_API_CALL(cuvidCtxUnlock(m_videoContextLock, 0));
 		RecordLostFrame(NvDecErrorCode::OutputPoolExhausted);
 		return 1;
+	}
+
+	if (m_outputKeyedMutexes[slot])
+	{
+		const HRESULT acquired = m_outputKeyedMutexes[slot]->AcquireSync(0, 8);
+		if (acquired != S_OK)
+		{
+			if (acquired == WAIT_TIMEOUT)
+			{
+				::InterlockedIncrement64(&m_droppedPoolExhaustedCount);
+				RecordLostFrame(NvDecErrorCode::OutputPoolExhausted);
+			}
+			else result = -1;
+			goto cleanup;
+		}
+		keyedMutexHeld = true;
 	}
 
 	// 여기부터 cleanup 까지 D3D11 리소스를 CUDA 에 매핑한 상태다.
@@ -1245,45 +1295,20 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 		goto cleanup;
 	}
 
-	// 이 슬롯의 GPU 작업이 끝났음을 표시할 이벤트를 스트림에 기록한다
-	if (!CUDA_DRVAPI_CALL(cuEventRecord(m_decodeCompleteEvents[slot], m_cudaStream)))
-	{
-		result = -1;
-		goto cleanup;
-	}
+	frameReady = true;
 
-	// 여기서 스트림을 동기화하지 않는다. 대기는 프레임이 실제로 필요한
-	// AcquireFrame 으로 넘기고, 그 지점이 m_decodeCompleteEvents 를 기다린다.
-	//
-	// 다만 그 대기가 실제로 겹쳐지지는 않는다. DecodeThread::Run 이 Parse
-	// 직후 같은 반복에서 AcquireFrame 을 부르므로, 방금 큐에 넣은 그 프레임을
-	// 곧바로 기다리게 된다. 미룬 거리는 사실상 0 이다.
-	//
-	// 그래도 이 모양이 맞다. 겹치게 하려면 드레인을 한 반복 뒤로 물려
-	// (N 을 파싱하면서 N-1 을 꺼내는 식) 프레임 하나만큼 늦게 내보내야 하는데,
-	// 그 대가가 60fps 에서 16.7ms 다. 아끼는 쪽은 QHD 변환 커널과
-	// device-to-device 복사라 1ms 안쪽이다. 저지연이 목적인 파이프라인에서
-	// 그 거래는 방향이 반대다.
-	//
-	// 그러니 이 비동기 구조가 버는 것은 처리량이 아니라, 스트림에 얹은
-	// 명령들 사이에서 CPU 가 불필요하게 블로킹하지 않는 것뿐이다.
-
-	// 페이로드를 먼저 쓰고 시퀀스를 올린다. InterlockedIncrement 가 full barrier 라
-	// 이 순서는 컴파일러도 CPU 도 뒤집지 못한다 — 소비자가 시퀀스를 본 시점에
-	// timestamp 는 반드시 보인다. 예전에 있던 MemoryBarrier 는 중복이었다.
-	//
-	// 텍스처 내용은 이 배리어의 관할이 아니다. 그쪽은 GPU 가 쓰므로
-	// m_decodeCompleteEvents 와 AcquireFrame 의 cuEventSynchronize 가 담당한다.
-	m_outputFrames[slot].timestamp = displayInfo->timestamp;
-	::InterlockedIncrement(&m_inputSequence);
-	::InterlockedIncrement64(&m_decodedFrameCount);
-	ResetLostFrameStreak();
-
-	// 사용이 끝난 Resource Unmap 처리
 cleanup:
-	if (mappedGraphicsResource)
+	if (mappedGraphicsResource && !CUDA_DRVAPI_CALL(cuGraphicsUnmapResources(1, &m_cudaOutputResources[slot], m_cudaStream)))
+		result = -1;
+
+	// The event covers Unmap as well as the CUDA copy. A keyed producer must
+	// finish GPU access before handing ownership to the other D3D11 device.
+	if (frameReady && result > 0 && !CUDA_DRVAPI_CALL(cuEventRecord(m_decodeCompleteEvents[slot], m_cudaStream)))
+		result = -1;
+	if (keyedMutexHeld)
 	{
-		CUDA_DRVAPI_CALL(cuGraphicsUnmapResources(1, &m_cudaOutputResources[slot], m_cudaStream));
+		if (!CUDA_DRVAPI_CALL(cuStreamSynchronize(m_cudaStream))) result = -1;
+		if (m_outputKeyedMutexes[slot]->ReleaseSync(0) != S_OK) result = -1;
 	}
 
 	if (mappedVideoFrame)
@@ -1298,6 +1323,13 @@ cleanup:
 		m_contextGate->Leave();
 	}
 
+	if (frameReady && result > 0)
+	{
+		m_outputFrames[slot].timestamp = displayInfo->timestamp;
+		::InterlockedIncrement(&m_inputSequence);
+		::InterlockedIncrement64(&m_decodedFrameCount);
+		ResetLostFrameStreak();
+	}
 	return result;
 }
 
@@ -1387,13 +1419,16 @@ void D3D11NvDecoder_Impl::ReleaseFrame(Frame* frame)
 		return;
 	}
 
-	if (::InterlockedExchange(&m_slotHeldByApp[slot], FALSE) != TRUE)
+	::AcquireSRWLockExclusive(&m_leaseLock);
+	const LONG refs = ::ReadAcquire(&m_slotHeldByApp[slot]);
+	if (refs > 0)
 	{
-		printf_s("[NVDEC WARNING] ReleaseFrame called twice for slot %u.\n", slot);
-		return;
+		::InterlockedDecrement(&m_slotHeldByApp[slot]);
+		if (refs == 1) ::InterlockedDecrement(&m_framesHeldByApp);
+		::WakeAllConditionVariable(&m_leaseChanged);
 	}
-
-	::InterlockedDecrement(&m_framesHeldByApp);
+	else printf_s("[NVDEC WARNING] ReleaseFrame called twice for slot %u.\n", slot);
+	::ReleaseSRWLockExclusive(&m_leaseLock);
 }
 
 // =============================================================================
@@ -1505,5 +1540,31 @@ bool D3D11NvDecoder_Impl::IsSlotHeldByApp(uint32_t slot) const
 		return false;
 	}
 
-	return ::ReadAcquire(&m_slotHeldByApp[slot]) == TRUE;
+	return ::ReadAcquire(&m_slotHeldByApp[slot]) > 0;
+}
+
+bool D3D11NvDecoder_Impl::GetSharedOutputPool(D3D11NvDecoder::SharedOutputPool& pool) const
+{
+	pool = {};
+	if (!m_userConfig.sharedOutputTextureMode || !m_userConfig.sharedOutputKeyedMutex || !m_outputSlotCount)
+		return false;
+	for (uint32_t i = 0; i < m_outputSlotCount; ++i)
+	{
+		if (!m_outputFrames[i].sharedHandle) return false;
+		pool.handles[i] = m_outputFrames[i].sharedHandle;
+	}
+	pool.count = m_outputSlotCount;
+	pool.generation = m_outputPoolGeneration;
+	return true;
+}
+
+bool D3D11NvDecoder_Impl::RetainFrame(const Frame& frame)
+{
+	const uint32_t slot = frame.slot;
+	::AcquireSRWLockExclusive(&m_leaseLock);
+	const bool valid = slot < m_outputSlotCount && &frame == &m_outputFrames[slot]
+		&& frame.poolGeneration == m_outputPoolGeneration && ::ReadAcquire(&m_slotHeldByApp[slot]) > 0;
+	if (valid) ::InterlockedIncrement(&m_slotHeldByApp[slot]);
+	::ReleaseSRWLockExclusive(&m_leaseLock);
+	return valid;
 }

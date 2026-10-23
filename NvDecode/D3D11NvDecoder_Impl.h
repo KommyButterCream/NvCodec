@@ -156,7 +156,7 @@ private:
 	// 쓸 수 없다 — Output 은 AcquireFrame 이 다음에 꺼낼 슬롯이다.
 	uint32_t GetInputSlotIndex() const;
 	uint32_t GetOutputSlotIndex() const;
-	bool IsSlotHeldByApp(uint32_t slot) const;
+	bool IsSlotReferenced(uint32_t slot) const;
 
 private:
 	// 출력 슬롯. 하나의 슬롯 번호가 아래를 전부 색인한다.
@@ -238,7 +238,8 @@ private:
 	alignas(64) volatile LONG m_outputSequence = 0;
 	SRWLOCK m_leaseLock = SRWLOCK_INIT;
 	CONDITION_VARIABLE m_leaseChanged = CONDITION_VARIABLE_INIT;
-	volatile LONG m_framesHeldByApp = 0;
+	// 참조 수가 1 이상인 출력 슬롯의 개수.
+	volatile LONG m_referencedSlotCount = 0;
 	volatile LONG64 m_deliveredFrameCount = 0;
 
 	// =====================================================================
@@ -254,7 +255,7 @@ private:
 	volatile LONG m_consecutiveLostFrames = 0;
 	volatile LONG m_reconfiguring = FALSE;
 
-	// 앱이 AcquireFrame 으로 가져간 뒤 아직 ReleaseFrame 하지 않은 슬롯.
-	// 이 슬롯에는 새 프레임을 쓸 수 없다.
-	alignas(64) volatile LONG m_slotHeldByApp[kMaxOutputSlotCount] = {};
+	// 출력 슬롯별 참조 수. AcquireFrame에서 1로 설정하고 RetainFrame/ReleaseFrame에서 증감한다.
+	// 참조 수가 0이 될 때까지 해당 슬롯에는 새 프레임을 쓸 수 없다.
+	alignas(64) volatile LONG m_slotReferenceCounts[kMaxOutputSlotCount] = {};
 };

@@ -214,7 +214,7 @@ bool D3D11NvDecoder_Impl::Initialize(
 	::InterlockedExchange(&m_outputSequence, 0);
 	::InterlockedExchange(&m_faulted, FALSE);
 	::InterlockedExchange(&m_consecutiveLostFrames, 0);
-	::InterlockedExchange(&m_framesHeldByApp, 0);
+	::InterlockedExchange(&m_referencedSlotCount, 0);
 	::InterlockedExchange64(&m_parsedPacketCount, 0);
 	::InterlockedExchange64(&m_decodedFrameCount, 0);
 	::InterlockedExchange64(&m_deliveredFrameCount, 0);
@@ -224,7 +224,7 @@ bool D3D11NvDecoder_Impl::Initialize(
 
 	for (uint32_t slot = 0; slot < kMaxOutputSlotCount; ++slot)
 	{
-		::InterlockedExchange(&m_slotHeldByApp[slot], FALSE);
+		::InterlockedExchange(&m_slotReferenceCounts[slot], 0);
 	}
 
 	// 디코더 생성을 위한 Cuda Driver 초기화, Context 생성/획득,
@@ -487,7 +487,7 @@ void D3D11NvDecoder_Impl::DestroyOutputSlots()
 {
 	// Never destroy a generation while an asynchronous consumer owns a slot.
 	::AcquireSRWLockExclusive(&m_leaseLock);
-	while (::ReadAcquire(&m_framesHeldByApp) > 0)
+	while (::ReadAcquire(&m_referencedSlotCount) > 0)
 		::SleepConditionVariableSRW(&m_leaseChanged, &m_leaseLock, INFINITE, 0);
 	::ReleaseSRWLockExclusive(&m_leaseLock);
 	// 생성 순서와 반대로 해제한다.
@@ -611,13 +611,13 @@ void D3D11NvDecoder_Impl::Destroy()
 		m_parserHandle = nullptr;
 	}
 
-	const LONG heldByApp = ::ReadAcquire(&m_framesHeldByApp);
-	if (heldByApp > 0)
+	const LONG referencedSlotCount = ::ReadAcquire(&m_referencedSlotCount);
+	if (referencedSlotCount > 0)
 	{
 		// 앱이 아직 들고 있는 텍스처를 여기서 해제한다.
 		// 앱이 쥔 포인터가 무효해지므로 조용히 넘어가지 않고 알린다.
 		printf_s("[NVDEC WARNING] Destroying while the app still holds %ld frame(s)."
-			" Waiting for retained frames to be returned.\n", heldByApp);
+			" Waiting for retained frames to be returned.\n", referencedSlotCount);
 	}
 
 	if (m_cudaContext)
@@ -672,7 +672,7 @@ void D3D11NvDecoder_Impl::Destroy()
 	::InterlockedExchange(&m_inputSequence, 0);
 	::InterlockedExchange(&m_outputSequence, 0);
 	::InterlockedExchange(&m_reconfiguring, FALSE);
-	::InterlockedExchange(&m_framesHeldByApp, 0);
+	::InterlockedExchange(&m_referencedSlotCount, 0);
 	m_outputTextureWidth = 0;
 	m_outputTextureHeight = 0;
 	m_bgraStagingPitch = 0;
@@ -680,7 +680,7 @@ void D3D11NvDecoder_Impl::Destroy()
 
 	for (uint32_t slot = 0; slot < kMaxOutputSlotCount; ++slot)
 	{
-		::InterlockedExchange(&m_slotHeldByApp[slot], FALSE);
+		::InterlockedExchange(&m_slotReferenceCounts[slot], 0);
 	}
 
 	if (m_D3D11Context)
@@ -1219,7 +1219,7 @@ int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
 	// 앱이 아직 이 슬롯을 들고 있으면 덮어쓸 수 없다.
 	// 여기서 덮어쓰면 앱이 렌더링 중인 텍스처가 찢어진다.
 	// 이번 프레임을 버리고 앱에 알린다.
-	if (IsSlotHeldByApp(slot))
+	if (IsSlotReferenced(slot))
 	{
 		::InterlockedIncrement64(&m_droppedPoolExhaustedCount);
 		NVDEC_API_CALL(cuvidUnmapVideoFrame(m_decoderHandle, srcFrame));
@@ -1374,7 +1374,7 @@ D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
 	const uint32_t slot = static_cast<uint32_t>(currentRead) & (m_outputSlotCount - 1U);
 
 	// 이 슬롯을 앱이 이미 들고 있으면 안 된다. 링 장부가 어긋났다는 뜻이다.
-	if (IsSlotHeldByApp(slot))
+	if (IsSlotReferenced(slot))
 	{
 		printf_s("[NVDEC ERROR] Output slot %u is still held by the app while being"
 			" handed out again. Ring bookkeeping is inconsistent.\n", slot);
@@ -1396,8 +1396,8 @@ D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
 		}
 	}
 
-	::InterlockedExchange(&m_slotHeldByApp[slot], TRUE);
-	::InterlockedIncrement(&m_framesHeldByApp);
+	::InterlockedExchange(&m_slotReferenceCounts[slot], 1);
+	::InterlockedIncrement(&m_referencedSlotCount);
 	::InterlockedIncrement(&m_outputSequence);
 	::InterlockedIncrement64(&m_deliveredFrameCount);
 
@@ -1420,11 +1420,11 @@ void D3D11NvDecoder_Impl::ReleaseFrame(Frame* frame)
 	}
 
 	::AcquireSRWLockExclusive(&m_leaseLock);
-	const LONG refs = ::ReadAcquire(&m_slotHeldByApp[slot]);
+	const LONG refs = ::ReadAcquire(&m_slotReferenceCounts[slot]);
 	if (refs > 0)
 	{
-		::InterlockedDecrement(&m_slotHeldByApp[slot]);
-		if (refs == 1) ::InterlockedDecrement(&m_framesHeldByApp);
+		::InterlockedDecrement(&m_slotReferenceCounts[slot]);
+		if (refs == 1) ::InterlockedDecrement(&m_referencedSlotCount);
 		::WakeAllConditionVariable(&m_leaseChanged);
 	}
 	else printf_s("[NVDEC WARNING] ReleaseFrame called twice for slot %u.\n", slot);
@@ -1496,7 +1496,7 @@ void D3D11NvDecoder_Impl::GetStats(NvDecStats& stats) const
 	stats.droppedDisplayFailed = static_cast<uint64_t>(
 		::ReadAcquire64(&m_droppedDisplayFailedCount));
 	stats.framesHeldByApp = static_cast<uint32_t>(
-		::ReadAcquire(&m_framesHeldByApp));
+		::ReadAcquire(&m_referencedSlotCount));
 	stats.faulted = IsFaulted();
 
 	// 큐 펌프를 쓰지 않으면 이 값들은 0 으로 남는다.
@@ -1533,38 +1533,72 @@ uint32_t D3D11NvDecoder_Impl::GetOutputSlotIndex() const
 	return static_cast<uint32_t>(sequence) & (m_outputSlotCount - 1U);
 }
 
-bool D3D11NvDecoder_Impl::IsSlotHeldByApp(uint32_t slot) const
+bool D3D11NvDecoder_Impl::IsSlotReferenced(uint32_t slot) const
 {
 	if (slot >= kMaxOutputSlotCount)
 	{
 		return false;
 	}
 
-	return ::ReadAcquire(&m_slotHeldByApp[slot]) > 0;
+	return ::ReadAcquire(&m_slotReferenceCounts[slot]) > 0;
 }
 
+// 렌더러가 공유 출력 텍스처를 한 번씩 열어 등록할 수 있도록 풀 정보를 반환한다.
+// 픽셀 복사나 핸들 소유권 이전은 하지 않는다. legacy 핸들이므로 소비자가 CloseHandle하면 안 된다.
+// 프레임 콜백 안이나 파싱이 정지된 상태에서 호출해야 풀 재생성과 겹치지 않는다.
 bool D3D11NvDecoder_Impl::GetSharedOutputPool(D3D11NvDecoder::SharedOutputPool& pool) const
 {
+	// 이전 호출의 슬롯 수, 세대 번호, 핸들이 결과에 남지 않도록 초기화한다.
 	pool = {};
+
+	// 현재 풀 등록 경로는 keyed mutex를 사용하는 공유 출력 모드에서만 제공한다.
+	// 출력 슬롯은 스트림 포맷을 확인한 뒤 생성되므로 초기화 직후에는 없을 수 있다.
 	if (!m_userConfig.sharedOutputTextureMode || !m_userConfig.sharedOutputKeyedMutex || !m_outputSlotCount)
 		return false;
+
 	for (uint32_t i = 0; i < m_outputSlotCount; ++i)
 	{
-		if (!m_outputFrames[i].sharedHandle) return false;
+		// 모든 슬롯의 핸들이 준비돼 있어야 풀 전체를 소비자에게 등록할 수 있다.
+		// 실패 시 false를 반환하므로 호출자는 부분적으로 채워진 결과를 사용하면 안 된다.
+		if (!m_outputFrames[i].sharedHandle)
+			return false;
+
+		// 핸들 값만 빌려준다. 소비자는 자신의 디바이스에서 열어 텍스처 참조를 확보한다.
 		pool.handles[i] = m_outputFrames[i].sharedHandle;
 	}
+
+	// 유효한 핸들 개수와 풀 세대를 전달한다. 세대가 바뀌면 소비자는 풀을 다시 등록해야 한다.
 	pool.count = m_outputSlotCount;
 	pool.generation = m_outputPoolGeneration;
+
 	return true;
 }
 
+// 이미 AcquireFrame한 출력 슬롯의 참조를 하나 추가해 콜백 밖에서도 프레임을 유지한다.
+// 픽셀 복사나 COM AddRef가 아니라 슬롯 재사용을 막는 참조다.
+// 성공한 호출마다 원래 Frame 포인터로 ReleaseFrame을 한 번 호출해야 한다.
 bool D3D11NvDecoder_Impl::RetainFrame(const Frame& frame)
 {
 	const uint32_t slot = frame.slot;
+
+	// ReleaseFrame과 검사/증가를 직렬화해 마지막 반납과 참조 추가가 엇갈리지 않게 한다.
 	::AcquireSRWLockExclusive(&m_leaseLock);
-	const bool valid = slot < m_outputSlotCount && &frame == &m_outputFrames[slot]
-		&& frame.poolGeneration == m_outputPoolGeneration && ::ReadAcquire(&m_slotHeldByApp[slot]) > 0;
-	if (valid) ::InterlockedIncrement(&m_slotHeldByApp[slot]);
+
+	// 슬롯 범위를 먼저 확인해 아래 배열 접근이 유효한지 보장한다.
+	const bool valid = slot < m_outputSlotCount &&
+		// 이 디코더가 보관한 원본 Frame만 허용한다. 구조체를 복사한 사본은 허용하지 않는다.
+		&frame == &m_outputFrames[slot] &&
+		// 현재 출력 풀에 속하는 프레임인지 확인한다.
+		frame.poolGeneration == m_outputPoolGeneration &&
+		// 이미 획득한 프레임만 유지할 수 있다. 반납이 끝난 슬롯을 다시 획득하는 함수가 아니다.
+		::ReadAcquire(&m_slotReferenceCounts[slot]) > 0;
+
+	// 기존 참조가 있으므로 참조 중인 슬롯의 총개수는 바꾸지 않고, 이 슬롯의 참조 수만 늘린다.
+	if (valid)
+		::InterlockedIncrement(&m_slotReferenceCounts[slot]);
+
 	::ReleaseSRWLockExclusive(&m_leaseLock);
+
+	// true일 때만 추가 참조를 확보했으며, 호출자에게 반납 책임이 생긴다.
 	return valid;
 }

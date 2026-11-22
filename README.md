@@ -37,8 +37,3 @@ msbuild .\NvCodec.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
 빌드한 DLL은 `x64/Release/NvCodec.dll` 또는 `x64/Debug/NvCodec.dll`에서 확인할 수 있다.
-
-## 설계 문서
-
-- [인코딩 파이프라인](docs/encode-pipeline.html)
-- [구현 및 과거 성능 측정 결과](docs/portfolio.html)

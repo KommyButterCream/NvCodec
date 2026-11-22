@@ -11,3 +11,5 @@ obj/
 *.VC.db
 *.VC.opendb
 *.bak
+/docs/
+/tools/

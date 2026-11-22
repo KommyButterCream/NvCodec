@@ -133,7 +133,7 @@
       <Project>{e3bd70c4-fc37-4703-9a54-152fd00bdea2}</Project>
     </ProjectReference>
   </ItemGroup>
-  <Target Name="NoStlCheck" BeforeTargets="ClCompile">
+  <Target Name="NoStlCheck" BeforeTargets="ClCompile" Condition="Exists('$(MSBuildProjectDirectory)\..\tools\nostl-check.ps1')">
     <!-- NvCodec DLL은 STL을 쓰지 않는다. 컨테이너/문자열/알고리즘 헤더가 들어오면
          빌드를 멈춘다. new, stdint.h 는 freestanding 서브셋이라 허용한다. -->
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\tools\nostl-check.ps1&quot; -Root &quot;$(MSBuildProjectDirectory)\..&quot;" />

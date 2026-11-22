@@ -1,0 +1,1604 @@
+﻿#include "pch.h"
+#include "D3D11NvDecoder_Impl.h"
+
+#include "DecodeThread.h"
+#include "DecodePacketQueue.h"
+
+#include <cudaD3D11.h>
+#include <malloc.h>
+#include <stdio.h> // for printf_s, fopen_s, fwrite
+#include <math.h>
+
+
+#include "../../D3D11EngineInterface/ID3D11ImmediateContextGate.h"
+#include "ColorSpaceCuda.cuh"
+
+
+inline bool CheckCudaDriverAPICall(
+	CUresult errorCode,
+	const char* func,
+	const char* file,
+	int32_t line)
+{
+	if (errorCode == CUDA_SUCCESS)
+		return true;
+
+	const char* errName = nullptr;
+	cuGetErrorName(errorCode, &errName);
+
+	printf_s("[CUDA ERROR] %s | %s (%s:%d)\n",
+		errName ? errName : "UNKNOWN",
+		func,
+		file,
+		line);
+
+	return false;
+}
+
+inline bool CheckNvDecodeAPICall(
+	CUresult errorCode,
+	const char* expr,
+	const char* func,
+	const char* file,
+	int32_t line)
+{
+	if (errorCode == CUDA_SUCCESS)
+		return true;
+
+	const char* errName = nullptr;
+	const char* errString = nullptr;
+
+	cuGetErrorName(errorCode, &errName);
+	cuGetErrorString(errorCode, &errString);
+
+	printf_s("[NVDEC ERROR]\n");
+	printf_s("  API   : %s\n", expr);
+	printf_s("  Code  : %d (%s)\n", errorCode, errName ? errName : "UNKNOWN");
+	printf_s("  Desc  : %s\n", errString ? errString : "NoDesc");
+	printf_s("  Where : %s (%s:%d)\n\n", func, file, line);
+
+	return false;
+}
+
+#define CUDA_DRVAPI_CALL(call) \
+    CheckCudaDriverAPICall((call), __FUNCTION__, __FILE__, __LINE__)
+
+#define NVDEC_API_CALL(call) \
+    CheckNvDecodeAPICall((call), #call, __FUNCTION__, __FILE__, __LINE__)
+
+namespace
+{
+	// Cuda Context Push/Pop 누락/불일치 방지 하기 위한 RAII Class
+	// Cuda Driver API 사용 시 Thread 마다 Current Context 를 직접 관리해야 한다.
+	class ScopedCudaContext
+	{
+	public:
+		explicit ScopedCudaContext(CUcontext context)
+		{
+			m_isActive = (context != nullptr) && CUDA_DRVAPI_CALL(cuCtxPushCurrent(context));
+		}
+
+		~ScopedCudaContext()
+		{
+			if (m_isActive)
+			{
+				CUDA_DRVAPI_CALL(cuCtxPopCurrent(nullptr));
+			}
+		}
+
+		bool IsActive() const
+		{
+			return m_isActive;
+		}
+
+	private:
+		bool m_isActive = false;
+	};
+
+	// 해상도 변경 등의 이유로 Reconfigure 중
+	// Display Callback 이 동시에 호출되어 해제된 리소스에 접근하는 것을 방지
+	class ScopedReconfigureFlag
+	{
+	public:
+		explicit ScopedReconfigureFlag(volatile LONG* flag)
+			: m_flag(flag)
+		{
+			::InterlockedExchange(m_flag, TRUE);
+		}
+
+		~ScopedReconfigureFlag()
+		{
+			::InterlockedExchange(m_flag, FALSE);
+		}
+
+	private:
+		volatile LONG* m_flag = nullptr;
+	};
+
+	inline bool IsPowerOfTwo(uint32_t value)
+	{
+		return value != 0 && (value & (value - 1)) == 0;
+	}
+
+	float GetChromaHeightFactor(cudaVideoSurfaceFormat eSurfaceFormat)
+	{
+		float factor = 0.5f;
+		switch (eSurfaceFormat)
+		{
+		case cudaVideoSurfaceFormat_NV12:
+		case cudaVideoSurfaceFormat_P016:
+			factor = 0.5f;
+			break;
+		case cudaVideoSurfaceFormat_YUV444:
+		case cudaVideoSurfaceFormat_YUV444_16Bit:
+		case cudaVideoSurfaceFormat_NV16:
+		case cudaVideoSurfaceFormat_P216:
+			factor = 1.0f;
+			break;
+		}
+
+		return factor;
+	}
+
+	uint32_t GetChromaPlaneCount(cudaVideoSurfaceFormat eSurfaceFormat)
+	{
+		switch (eSurfaceFormat)
+		{
+		case cudaVideoSurfaceFormat_YUV444:
+		case cudaVideoSurfaceFormat_YUV444_16Bit:
+			return 2;
+		default:
+			return 1;
+		}
+	}
+}
+// =============================================================================
+// 생성 / 소멸
+// =============================================================================
+
+D3D11NvDecoder_Impl::~D3D11NvDecoder_Impl()
+{
+	Destroy();
+}
+
+// =============================================================================
+// 초기화 / 종료
+// =============================================================================
+
+bool D3D11NvDecoder_Impl::Initialize(
+	ID3D11Device* device,
+	const NvDecConfig& config,
+	ID3D11ImmediateContextGate* contextGate)
+{
+	if (!device)
+	{
+		return false;
+	}
+
+	// 슬롯이 1 개면 앱이 프레임을 들고 있는 동안 쓸 슬롯이 없어
+	// 모든 프레임이 버려진다. 엔코더와 같은 이유로 최소 2 를 요구한다.
+	if (config.outputSlotCount < kMinOutputSlotCount
+		|| config.outputSlotCount > kMaxOutputSlotCount
+		|| !IsPowerOfTwo(config.outputSlotCount))
+	{
+		printf_s("[NVDEC ERROR] Invalid outputSlotCount %u."
+			" It must be a power of two between %u and %u.\n",
+			config.outputSlotCount, kMinOutputSlotCount, kMaxOutputSlotCount);
+		return false;
+	}
+
+	if (config.sharedOutputKeyedMutex && !config.sharedOutputTextureMode)
+	{
+		return false;
+	}
+
+	if (config.maxDecodeSurfaces == 0)
+	{
+		printf_s("[NVDEC ERROR] maxDecodeSurfaces must be non-zero.\n");
+		return false;
+	}
+
+	Destroy();
+
+	// 건네 받은 D3D11 Device, Context 포인터의 참조 횟수 증가
+	// Destroy 시점에 Release 호출 필요
+	m_D3D11Device = device;
+	m_D3D11Device->AddRef();
+	m_D3D11Device->GetImmediateContext(&m_D3D11Context);
+	m_contextGate = contextGate;
+
+	m_userConfig = config;
+	m_outputSlotCount = config.outputSlotCount;
+
+	::InterlockedExchange(&m_inputSequence, 0);
+	::InterlockedExchange(&m_outputSequence, 0);
+	::InterlockedExchange(&m_faulted, FALSE);
+	::InterlockedExchange(&m_consecutiveLostFrames, 0);
+	::InterlockedExchange(&m_referencedSlotCount, 0);
+	::InterlockedExchange64(&m_parsedPacketCount, 0);
+	::InterlockedExchange64(&m_decodedFrameCount, 0);
+	::InterlockedExchange64(&m_deliveredFrameCount, 0);
+	::InterlockedExchange64(&m_droppedPoolExhaustedCount, 0);
+	::InterlockedExchange64(&m_droppedNotConsumedCount, 0);
+	::InterlockedExchange64(&m_droppedDisplayFailedCount, 0);
+
+	for (uint32_t slot = 0; slot < kMaxOutputSlotCount; ++slot)
+	{
+		::InterlockedExchange(&m_slotReferenceCounts[slot], 0);
+	}
+
+	// 디코더 생성을 위한 Cuda Driver 초기화, Context 생성/획득,
+	// NVDEC 사용을 위한 ctxLock / Stream / Event / Parser 리소스 생성
+	if (!CreateCudaResources())
+	{
+		Destroy();
+		return false;
+	}
+
+	// 유입 큐. 소비자가 디코드 스레드 하나뿐이라 여기서 만들어 소유한다.
+	if (!CreateInputQueue(config.inputQueueDepth, config.maxPacketSize))
+	{
+		printf_s("[NVDEC ERROR] Initialize stage failed: CreateInputQueue.\n");
+		Destroy();
+		return false;
+	}
+
+	return true;
+}
+
+bool D3D11NvDecoder_Impl::CreateCudaResources()
+{
+	// 디코딩에 필요한 CUDA / NVDEC 자원을 한 번에 만든다 — driver 초기화,
+	// context 획득, ctxLock, stream, 슬롯별 완료 이벤트, 그리고 파서까지.
+
+	// Cuda Driver API 사용 전에 cuInit 호출 필수
+	if (!CUDA_DRVAPI_CALL(cuInit(0)))
+	{
+		return false;
+	}
+
+	bool deviceFound = false;
+	IDXGIDevice* dxgiDevice = nullptr;
+	IDXGIAdapter* adapter = nullptr;
+
+	// D3D11 <-> CUDA Device 매칭
+	// Multi-GPU 사용 시를 고려하여 Cuda 와 D3D11 이 동일한 GPU 를 사용하도록 맞춘다.
+	if (SUCCEEDED(m_D3D11Device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgiDevice))))
+	{
+		if (SUCCEEDED(dxgiDevice->GetAdapter(&adapter)))
+		{
+			if (CUDA_DRVAPI_CALL(cuD3D11GetDevice(&m_cudaDevice, adapter)))
+			{
+				deviceFound = true;
+			}
+			adapter->Release();
+		}
+		dxgiDevice->Release();
+	}
+
+	// 찾지 못했으면 기본값으로 0번 GPU 사용
+	if (!deviceFound && !CUDA_DRVAPI_CALL(cuDeviceGet(&m_cudaDevice, 0)))
+	{
+		return false;
+	}
+
+	// NVDEC 는 Primary Context 사용을 권장한다.
+	// cuCtxCreate 로 따로 만드는 방식은 Deprecated 되었다.
+	if (!CUDA_DRVAPI_CALL(cuDevicePrimaryCtxRetain(&m_cudaContext, m_cudaDevice)))
+	{
+		return false;
+	}
+
+	if (!CUDA_DRVAPI_CALL(cuCtxPushCurrent(m_cudaContext)))
+	{
+		CUDA_DRVAPI_CALL(cuDevicePrimaryCtxRelease(m_cudaDevice));
+		m_cudaContext = nullptr;
+		return false;
+	}
+
+	bool success = false;
+	do
+	{
+		// NVDEC 내부 동기화 Lock 생성
+		if (!NVDEC_API_CALL(cuvidCtxLockCreate(&m_videoContextLock, m_cudaContext)))
+		{
+			break;
+		}
+
+		// 비동기 처리를 위한 Cuda Stream 생성
+		if (!CUDA_DRVAPI_CALL(cuStreamCreate(&m_cudaStream, CU_STREAM_NON_BLOCKING)))
+		{
+			break;
+		}
+
+		// Decode 완료 처리를 송수신 하기 위한 Cuda Event 생성
+		// Cuda 명령어 사이에 Event 를 넣어서 정확한 시점에 이벤트 동기화를 수행
+		for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+		{
+			if (!CUDA_DRVAPI_CALL(cuEventCreate(&m_decodeCompleteEvents[slot], CU_EVENT_DISABLE_TIMING)))
+			{
+				break;
+			}
+		}
+
+		if (!m_decodeCompleteEvents[m_outputSlotCount - 1])
+		{
+			break;
+		}
+
+		// NVDEC Parser 생성
+		// cuvidParseVideoData 를 호출하면 내부 Callback 구조로
+		// VideoSequenceCallback -> PictureDecodeCallback -> PictureDisplayCallback 가 호출된다.
+		// 이 코드에서는 H.264 코덱 기준으로 디코더를 생성.
+		//
+		// ulMaxDisplayDelay 0 은 저지연용이다. 파서가 표시 순서를 맞추려고
+		// 프레임을 붙들지 않고 디코딩되는 즉시 내보낸다. B 프레임을 쓰면
+		// 표시 순서가 어긋나지만, 이 파이프라인은 B 프레임을 쓰지 않는다.
+		CUVIDPARSERPARAMS parserParameters = {};
+		parserParameters.CodecType = cudaVideoCodec_H264;
+		parserParameters.ulMaxNumDecodeSurfaces = m_userConfig.maxDecodeSurfaces;
+		parserParameters.ulMaxDisplayDelay = 0;
+		parserParameters.pUserData = this;
+		parserParameters.pfnSequenceCallback = VideoSequenceCallback;
+		parserParameters.pfnDecodePicture = PictureDecodeCallback;
+		parserParameters.pfnDisplayPicture = PictureDisplayCallback;
+
+		if (!NVDEC_API_CALL(cuvidCreateVideoParser(&m_parserHandle, &parserParameters)))
+		{
+			break;
+		}
+
+		success = true;
+	} while (false);
+
+	CUDA_DRVAPI_CALL(cuCtxPopCurrent(nullptr));
+
+	if (!success)
+	{
+		Destroy();
+	}
+
+	return success;
+}
+
+bool D3D11NvDecoder_Impl::CreateOutputSlots()
+{
+	// 디코딩 완료 시점(OnPictureDisplay)에 NV12 서페이스를 BGRA 32bit 로 변환해
+	// D3D11 Texture2D 에 저장한다. 앱은 그 텍스처를 그대로 렌더링에 쓴다.
+	//
+	// 텍스처를 매 프레임 만들지 않고 슬롯 수만큼 미리 만들어 두고
+	// CUDA interop 으로 등록해 재사용한다.
+
+	const bool resizeRequired = (m_outputTextureWidth != m_videoFormatDesc.lumaWidth) ||
+		(m_outputTextureHeight != m_videoFormatDesc.lumaHeight);
+
+	// 모든 슬롯이 갖춰져 있는지 확인한다. 0 번만 보면 부분 실패 상태를 놓친다.
+	bool allSlotsReady = true;
+	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+	{
+		if (!m_outputTextures[slot] || !m_cudaOutputResources[slot])
+		{
+			allSlotsReady = false;
+			break;
+		}
+	}
+
+	if (!resizeRequired && allSlotsReady)
+	{
+		return true;
+	}
+
+	ScopedCudaContext cudaContext(m_cudaContext);
+	if (!cudaContext.IsActive())
+	{
+		return false;
+	}
+
+	DestroyOutputSlots();
+	m_outputTextureWidth = m_videoFormatDesc.lumaWidth;
+	m_outputTextureHeight = m_videoFormatDesc.lumaHeight;
+
+	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+	{
+		D3D11_TEXTURE2D_DESC desc = {};
+		desc.Width = m_videoFormatDesc.lumaWidth;
+		desc.Height = m_videoFormatDesc.lumaHeight;
+		desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		desc.MiscFlags = m_userConfig.sharedOutputTextureMode
+			? (m_userConfig.sharedOutputKeyedMutex ? D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX : D3D11_RESOURCE_MISC_SHARED)
+			: 0;
+
+		// CreateTexture2D 는 디바이스 호출이라 스레드 세이프하다.
+		HRESULT hr = m_D3D11Device->CreateTexture2D(&desc, nullptr, &m_outputTextures[slot]);
+		if (FAILED(hr))
+		{
+			printf_s("[NVDEC ERROR] CreateTexture2D failed for slot %u. hr=0x%08lX\n",
+				slot, static_cast<unsigned long>(hr));
+			DestroyOutputSlots();
+			return false;
+		}
+
+		if (m_userConfig.sharedOutputTextureMode)
+		{
+			IDXGIResource* dxgiResource = nullptr;
+			hr = m_outputTextures[slot]->QueryInterface(
+				__uuidof(IDXGIResource), reinterpret_cast<void**>(&dxgiResource));
+			if (FAILED(hr) || !dxgiResource)
+			{
+				DestroyOutputSlots();
+				return false;
+			}
+
+			hr = dxgiResource->GetSharedHandle(&m_outputFrames[slot].sharedHandle);
+			dxgiResource->Release();
+			if (FAILED(hr) || !m_outputFrames[slot].sharedHandle)
+			{
+				DestroyOutputSlots();
+				return false;
+			}
+		}
+
+		if (m_userConfig.sharedOutputKeyedMutex)
+		{
+			hr = m_outputTextures[slot]->QueryInterface(__uuidof(IDXGIKeyedMutex),
+				reinterpret_cast<void**>(&m_outputKeyedMutexes[slot]));
+			if (FAILED(hr))
+			{
+				DestroyOutputSlots();
+				return false;
+			}
+		}
+
+		// CUDA interop 등록은 D3D11 리소스를 만진다. 게이트 안에서 처리한다.
+		// 실패 정리(DestroyOutputSlots)가 스스로 게이트를 잡으므로
+		// 이 범위를 벗어난 뒤에 호출해야 중첩 획득을 피할 수 있다.
+		bool registered = false;
+		{
+			D3D11ImmediateContextGuard contextGuard(m_contextGate);
+			registered = CUDA_DRVAPI_CALL(cuGraphicsD3D11RegisterResource(
+				&m_cudaOutputResources[slot],
+				m_outputTextures[slot],
+				CU_GRAPHICS_REGISTER_FLAGS_NONE));
+		}
+
+		if (!registered)
+		{
+			DestroyOutputSlots();
+			return false;
+		}
+
+		m_outputFrames[slot].texture = m_outputTextures[slot];
+		m_outputFrames[slot].timestamp = 0;
+		m_outputFrames[slot].slot = slot;
+	}
+
+	++m_outputPoolGeneration;
+	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+		m_outputFrames[slot].poolGeneration = m_outputPoolGeneration;
+	return true;
+}
+
+void D3D11NvDecoder_Impl::DestroyOutputSlots()
+{
+	// Never destroy a generation while an asynchronous consumer owns a slot.
+	::AcquireSRWLockExclusive(&m_leaseLock);
+	while (::ReadAcquire(&m_referencedSlotCount) > 0)
+		::SleepConditionVariableSRW(&m_leaseChanged, &m_leaseLock, INFINITE, 0);
+	::ReleaseSRWLockExclusive(&m_leaseLock);
+	// 생성 순서와 반대로 해제한다.
+	// cuGraphicsUnregisterResource 는 D3D11 리소스를 만지므로 게이트가 필요하다.
+	// 호출자가 게이트를 잡은 상태로 부르면 안 된다(재귀 획득 불가).
+	D3D11ImmediateContextGuard contextGuard(m_contextGate);
+
+	for (uint32_t slot = 0; slot < kMaxOutputSlotCount; ++slot)
+	{
+		if (m_cudaOutputResources[slot])
+		{
+			CUDA_DRVAPI_CALL(cuGraphicsUnregisterResource(m_cudaOutputResources[slot]));
+			m_cudaOutputResources[slot] = nullptr;
+		}
+
+		if (m_outputKeyedMutexes[slot])
+		{
+			m_outputKeyedMutexes[slot]->Release();
+			m_outputKeyedMutexes[slot] = nullptr;
+		}
+
+		if (m_outputTextures[slot])
+		{
+			m_outputTextures[slot]->Release();
+			m_outputTextures[slot] = nullptr;
+		}
+
+		m_outputFrames[slot].texture = nullptr;
+		m_outputFrames[slot].sharedHandle = nullptr;
+		m_outputFrames[slot].timestamp = 0;
+		m_outputFrames[slot].slot = slot;
+	}
+}
+
+bool D3D11NvDecoder_Impl::CreateBGRAStagingBuffers()
+{
+	// BGRA 32 Bit 변환 결과가 저장될 Cuda Memory 생성
+
+	ScopedCudaContext cudaContext(m_cudaContext);
+	if (!cudaContext.IsActive())
+	{
+		return false;
+	}
+
+	DestroyBGRAStagingBuffers();
+	m_bgraStagingPitch = 0;
+
+	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+	{
+		// GPU 내부 메모리 구조에 맞추어 Aligned 된 메모리를 생성하기 위해
+		// cuMemAllocPitch 사용.
+		if (!CUDA_DRVAPI_CALL(cuMemAllocPitch(
+			&m_bgraStagingBuffers[slot],
+			&m_bgraStagingPitch,
+			m_videoFormatDesc.lumaWidth * 4,
+			m_videoFormatDesc.lumaHeight,
+			16)))
+		{
+			DestroyBGRAStagingBuffers();
+			return false;
+		}
+	}
+
+	return true;
+}
+
+void D3D11NvDecoder_Impl::DestroyBGRAStagingBuffers()
+{
+	// Cuda Device 메모리 해제
+	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+	{
+		if (m_bgraStagingBuffers[slot])
+		{
+			CUDA_DRVAPI_CALL(cuMemFree(m_bgraStagingBuffers[slot]));
+			m_bgraStagingBuffers[slot] = 0;
+		}
+	}
+	m_bgraStagingPitch = 0;
+}
+
+void D3D11NvDecoder_Impl::WaitForAllSlotGpuWork()
+{
+	// cuEvent 로 모든 프레임이 Idle 상태인지 체크
+	// Decode 중 이라면 cuEventSynchronize 로 대기
+	// 이벤트는 OnPictureDisplay 가 스트림에 기록해 둔다.
+
+	ScopedCudaContext cudaContext(m_cudaContext);
+	if (!cudaContext.IsActive())
+	{
+		return;
+	}
+
+	for (uint32_t slot = 0; slot < m_outputSlotCount; ++slot)
+	{
+		if (!m_decodeCompleteEvents[slot])
+		{
+			continue;
+		}
+
+		if (cuEventQuery(m_decodeCompleteEvents[slot]) == CUDA_SUCCESS)
+		{
+			continue;
+		}
+
+		CUDA_DRVAPI_CALL(cuEventSynchronize(m_decodeCompleteEvents[slot]));
+	}
+}
+
+void D3D11NvDecoder_Impl::Destroy()
+{
+	// 큐 펌프를 먼저 멈춘다. 이게 살아 있으면 해체 중인 파서로 패킷이 계속 들어온다.
+	StopDecodeThread();
+
+	// 소비자가 멈춘 뒤에 큐를 닫는다.
+	DestroyInputQueue();
+
+	// 파서를 먼저 없애야 이후 콜백이 들어오지 않는다.
+	if (m_parserHandle)
+	{
+		NVDEC_API_CALL(cuvidDestroyVideoParser(m_parserHandle));
+		m_parserHandle = nullptr;
+	}
+
+	const LONG referencedSlotCount = ::ReadAcquire(&m_referencedSlotCount);
+	if (referencedSlotCount > 0)
+	{
+		// 앱이 아직 들고 있는 텍스처를 여기서 해제한다.
+		// 앱이 쥔 포인터가 무효해지므로 조용히 넘어가지 않고 알린다.
+		printf_s("[NVDEC WARNING] Destroying while the app still holds %ld frame(s)."
+			" Waiting for retained frames to be returned.\n", referencedSlotCount);
+	}
+
+	if (m_cudaContext)
+	{
+		ScopedCudaContext cudaContext(m_cudaContext);
+		if (cudaContext.IsActive())
+		{
+			// Decode 수행 중인 프레임이 있다면 전부 기다린 후에 해제한다.
+			WaitForAllSlotGpuWork();
+			DestroyOutputSlots();
+			DestroyBGRAStagingBuffers();
+
+			if (m_decoderHandle)
+			{
+				NVDEC_API_CALL(cuvidDestroyDecoder(m_decoderHandle));
+				m_decoderHandle = nullptr;
+			}
+
+			for (uint32_t slot = 0; slot < kMaxOutputSlotCount; ++slot)
+			{
+				if (m_decodeCompleteEvents[slot])
+				{
+					CUDA_DRVAPI_CALL(cuEventDestroy(m_decodeCompleteEvents[slot]));
+					m_decodeCompleteEvents[slot] = nullptr;
+				}
+			}
+
+			if (m_cudaStream)
+			{
+				CUDA_DRVAPI_CALL(cuStreamDestroy(m_cudaStream));
+				m_cudaStream = nullptr;
+			}
+		}
+
+		if (m_videoContextLock)
+		{
+			NVDEC_API_CALL(cuvidCtxLockDestroy(m_videoContextLock));
+			m_videoContextLock = nullptr;
+		}
+	}
+
+	if (m_cudaContext)
+	{
+		CUDA_DRVAPI_CALL(cuDevicePrimaryCtxRelease(m_cudaDevice));
+		m_cudaContext = nullptr;
+	}
+
+	SetErrorCallback(nullptr, nullptr);
+
+	m_videoFormatDesc = {};
+	::ZeroMemory(&m_currentVideoFormat, sizeof(m_currentVideoFormat));
+	::InterlockedExchange(&m_inputSequence, 0);
+	::InterlockedExchange(&m_outputSequence, 0);
+	::InterlockedExchange(&m_reconfiguring, FALSE);
+	::InterlockedExchange(&m_referencedSlotCount, 0);
+	m_outputTextureWidth = 0;
+	m_outputTextureHeight = 0;
+	m_bgraStagingPitch = 0;
+	m_outputSlotCount = 0;
+
+	for (uint32_t slot = 0; slot < kMaxOutputSlotCount; ++slot)
+	{
+		::InterlockedExchange(&m_slotReferenceCounts[slot], 0);
+	}
+
+	if (m_D3D11Context)
+	{
+		m_D3D11Context->Release();
+		m_D3D11Context = nullptr;
+	}
+
+	if (m_D3D11Device)
+	{
+		m_D3D11Device->Release();
+		m_D3D11Device = nullptr;
+	}
+
+	m_contextGate = nullptr;
+}
+
+// =============================================================================
+// 재설정
+// =============================================================================
+
+int32_t D3D11NvDecoder_Impl::ReconfigureForVideoFormat(CUVIDEOFORMAT* videoFormat)
+{
+	// NVDEC 해상도가 변경되거나 Display Area 가 변경된 경우
+	// Decode 중인 Frame 의 진행 완료를 대기한 후에
+	// 변경된 해상도, Display Area 에 맞추어
+	// 텍스쳐풀, 메모리풀을 삭제 후 Reconfigure 후 텍스쳐풀, 메모리풀을 다시 생성한다.
+
+	if (!m_decoderHandle || !videoFormat)
+	{
+		return static_cast<int32_t>(SequenceResult::Failed);
+	}
+
+	ScopedReconfigureFlag reconfigureFlag(&m_reconfiguring);
+
+	if (videoFormat->bit_depth_luma_minus8 != m_currentVideoFormat.bit_depth_luma_minus8 ||
+		videoFormat->bit_depth_chroma_minus8 != m_currentVideoFormat.bit_depth_chroma_minus8)
+	{
+		return static_cast<int32_t>(SequenceResult::Failed);
+	}
+
+	if (videoFormat->chroma_format != m_currentVideoFormat.chroma_format)
+	{
+		return static_cast<int32_t>(SequenceResult::Failed);
+	}
+
+	const bool isDecodeResChange = !(videoFormat->coded_width == m_currentVideoFormat.coded_width && videoFormat->coded_height == m_currentVideoFormat.coded_height);
+	const bool isDisplayRectChange =
+		!(videoFormat->display_area.bottom == m_currentVideoFormat.display_area.bottom &&
+			videoFormat->display_area.top == m_currentVideoFormat.display_area.top &&
+			videoFormat->display_area.left == m_currentVideoFormat.display_area.left &&
+			videoFormat->display_area.right == m_currentVideoFormat.display_area.right);
+
+	if (!isDecodeResChange && isDisplayRectChange)
+	{
+		// Display Rectangle 만 변경된 경우
+		// VideoFormatDesc 만 업데이트 하고 종료
+		m_videoFormatDesc.lumaWidth = videoFormat->display_area.right - videoFormat->display_area.left;
+		m_videoFormatDesc.lumaHeight = videoFormat->display_area.bottom - videoFormat->display_area.top;
+		m_videoFormatDesc.chromaHeight = static_cast<uint32_t>(ceil(m_videoFormatDesc.lumaHeight * GetChromaHeightFactor(m_videoFormatDesc.outputFormat)));
+		m_videoFormatDesc.chromaPlanes = GetChromaPlaneCount(m_videoFormatDesc.outputFormat);
+		m_currentVideoFormat = *videoFormat;
+		return static_cast<int32_t>(SequenceResult::KeepSurfaceCount);
+	}
+
+	if (!isDecodeResChange)
+	{
+		// Decoder 해상도가 변경되지 않은 경우라면
+		// m_currentVideoFormat 만 갱신하고 종료
+		m_currentVideoFormat = *videoFormat;
+		return static_cast<int32_t>(SequenceResult::KeepSurfaceCount);
+	}
+
+
+	// 여기까지 온 경우라면 디코더 해상도가 변경된 경우
+	// 리소스를 해제할 예정이므로 디코딩 중인 모든 프레임이 끝날 때까지 대기
+	WaitForAllSlotGpuWork();
+
+	ScopedCudaContext cudaContext(m_cudaContext);
+	if (!cudaContext.IsActive())
+	{
+		return static_cast<int32_t>(SequenceResult::Failed);
+	}
+
+	// 리소스 해제
+	DestroyOutputSlots();
+	DestroyBGRAStagingBuffers();
+
+	// VideoFormatDesc 업데이트
+	m_videoFormatDesc.codedWidth = videoFormat->coded_width;
+	m_videoFormatDesc.codedHeight = videoFormat->coded_height;
+	m_videoFormatDesc.lumaWidth = videoFormat->display_area.right - videoFormat->display_area.left;
+	m_videoFormatDesc.lumaHeight = videoFormat->display_area.bottom - videoFormat->display_area.top;
+	m_videoFormatDesc.chromaHeight = static_cast<uint32_t>(ceil(m_videoFormatDesc.lumaHeight * GetChromaHeightFactor(m_videoFormatDesc.outputFormat)));
+	m_videoFormatDesc.chromaPlanes = GetChromaPlaneCount(m_videoFormatDesc.outputFormat);
+	if (m_videoFormatDesc.decodeSurfaceCount < videoFormat->min_num_decode_surfaces)
+	{
+		m_videoFormatDesc.decodeSurfaceCount = videoFormat->min_num_decode_surfaces;
+	}
+
+	// Cuda NVDEC Reconfigure 옵션 설정 후 Reconfigure 수행
+	CUVIDRECONFIGUREDECODERINFO reconfigureParameters = {};
+	reconfigureParameters.ulWidth = m_videoFormatDesc.codedWidth;
+	reconfigureParameters.ulHeight = m_videoFormatDesc.codedHeight;
+	// SDK 안에서 타입이 어긋나 있다. CUVIDEOFORMAT::display_area 는 int 이고
+	// CUVIDRECONFIGUREDECODERINFO::display_area 는 short 다. 축소 변환을
+	// 명시해 둔다 — 표시 좌표가 32767 을 넘을 일은 없다(NVDEC 최대 해상도가
+	// 8192 급이다). 암묵 변환으로 두면 /W4 에서 매번 경고가 난다.
+	reconfigureParameters.display_area.left = static_cast<short>(videoFormat->display_area.left);
+	reconfigureParameters.display_area.top = static_cast<short>(videoFormat->display_area.top);
+	reconfigureParameters.display_area.right = static_cast<short>(videoFormat->display_area.right);
+	reconfigureParameters.display_area.bottom = static_cast<short>(videoFormat->display_area.bottom);
+	reconfigureParameters.ulTargetWidth = m_videoFormatDesc.codedWidth;
+	reconfigureParameters.ulTargetHeight = m_videoFormatDesc.codedHeight;
+	reconfigureParameters.ulNumDecodeSurfaces = m_videoFormatDesc.decodeSurfaceCount;
+
+	if (!NVDEC_API_CALL(cuvidReconfigureDecoder(m_decoderHandle, &reconfigureParameters)))
+	{
+		return static_cast<int32_t>(SequenceResult::Failed);
+	}
+
+	// 새로운 해상도에 맞추어 리소스 재생성
+	if (!CreateOutputSlots() || !CreateBGRAStagingBuffers())
+	{
+		DestroyOutputSlots();
+		DestroyBGRAStagingBuffers();
+		return static_cast<int32_t>(SequenceResult::Failed);
+	}
+
+	// 기타 정보 재생성
+	m_currentVideoFormat = *videoFormat;
+	m_inputSequence = 0;
+	m_outputSequence = 0;
+
+	return m_videoFormatDesc.decodeSurfaceCount;
+}
+
+// =============================================================================
+// 디코드 스레드 제어
+// =============================================================================
+
+bool D3D11NvDecoder_Impl::StartDecodeThread()
+{
+	// 큐는 Initialize 가 만든다.
+	if (!m_inputQueue)
+	{
+		printf_s("[NVDEC ERROR] StartDecodeThread requires an initialized decoder.\n");
+		return false;
+	}
+
+	StopDecodeThread();
+
+	m_decodeThread = new (std::nothrow) DecodeThread();
+	if (!m_decodeThread)
+	{
+		return false;
+	}
+
+	m_decodeThread->SetFrameCallback(m_frameCallback, m_frameCallbackUserData);
+
+	if (!m_decodeThread->Initialize(m_inputQueue, this))
+	{
+		delete m_decodeThread;
+		m_decodeThread = nullptr;
+		return false;
+	}
+
+	return true;
+}
+
+void D3D11NvDecoder_Impl::StopDecodeThread()
+{
+	if (!m_decodeThread)
+	{
+		return;
+	}
+
+	m_decodeThread->Shutdown();
+	delete m_decodeThread;
+	m_decodeThread = nullptr;
+}
+
+bool D3D11NvDecoder_Impl::CreateInputQueue(size_t depth, size_t bufferSize)
+{
+	DestroyInputQueue();
+
+	m_inputQueue = new (std::nothrow) DecodePacketQueue();
+	if (!m_inputQueue)
+		return false;
+
+	if (!m_inputQueue->Initialize(depth, bufferSize))
+	{
+		DestroyInputQueue();
+		return false;
+	}
+
+	return true;
+}
+
+void D3D11NvDecoder_Impl::DestroyInputQueue()
+{
+	if (!m_inputQueue)
+		return;
+
+	// 큐는 패킷을 자기 버퍼로 복사해 두므로 돌려줄 것이 없다.
+	// Shutdown 은 대기 중인 리더를 깨우기 위한 것이다.
+	m_inputQueue->Shutdown();
+	delete m_inputQueue;
+	m_inputQueue = nullptr;
+}
+
+bool D3D11NvDecoder_Impl::EnqueuePacket(const NvDecPacket& packet)
+{
+	if (!m_inputQueue)
+		return false;
+
+	return m_inputQueue->EnqueuePacket(packet);
+}
+
+// =============================================================================
+// 콜백 등록
+// =============================================================================
+
+void D3D11NvDecoder_Impl::SetFrameCallback(D3D11NvDecoder::FrameCallback callback, void* userData)
+{
+	// 스레드가 아직 없으면 기억해 뒀다가 StartDecodeThread 에서 넘긴다.
+	m_frameCallback = callback;
+	m_frameCallbackUserData = userData;
+
+	if (m_decodeThread)
+	{
+		m_decodeThread->SetFrameCallback(callback, userData);
+	}
+}
+
+void D3D11NvDecoder_Impl::SetErrorCallback(ErrorCallback callback, void* userData)
+{
+	::AcquireSRWLockExclusive(&m_callbackLock);
+	m_errorCallback = callback;
+	m_errorCallbackUserData = userData;
+	::ReleaseSRWLockExclusive(&m_callbackLock);
+}
+
+// =============================================================================
+// 비트스트림 투입
+// =============================================================================
+
+bool D3D11NvDecoder_Impl::Parse(const uint8_t* data, uint32_t size, uint64_t timestamp,
+	bool endOfPicture, bool endOfStream, bool discontinuity)
+{
+	// Decode Thread 가 호출하는 Decode Request 함수.
+	// 이후 VideoSequenceCallback -> PictureDecodeCallback -> PictureDisplayCallback
+	// 순서로 콜백이 호출된다.
+	if (!m_parserHandle || (!data && size > 0))
+	{
+		return false;
+	}
+
+	if (IsFaulted())
+	{
+		return false;
+	}
+
+	CUVIDSOURCEDATAPACKET packet = {};
+	packet.payload = data;
+	packet.payload_size = size;
+	packet.timestamp = static_cast<CUvideotimestamp>(timestamp);
+	packet.flags = CUVID_PKT_TIMESTAMP;
+
+	if (endOfPicture)
+		packet.flags |= CUVID_PKT_ENDOFPICTURE;
+	if (endOfStream)
+		packet.flags |= CUVID_PKT_ENDOFSTREAM;
+	if (discontinuity)
+		packet.flags |= CUVID_PKT_DISCONTINUITY;
+
+	if (!NVDEC_API_CALL(cuvidParseVideoData(m_parserHandle, &packet)))
+	{
+		// 비트스트림이 깨졌을 수 있다. 파이프라인은 유지하고 앱에 알린다.
+		RecordLostFrame(NvDecErrorCode::ParseFailed);
+		return false;
+	}
+
+	::InterlockedIncrement64(&m_parsedPacketCount);
+	return true;
+}
+
+// =============================================================================
+// 파서 콜백 (NVDEC)
+// =============================================================================
+
+int32_t CUDAAPI D3D11NvDecoder_Impl::VideoSequenceCallback(void* userData, CUVIDEOFORMAT* format)
+{
+	return reinterpret_cast<D3D11NvDecoder_Impl*>(userData)->OnVideoSequence(format);
+}
+
+int32_t CUDAAPI D3D11NvDecoder_Impl::PictureDecodeCallback(void* userData, CUVIDPICPARAMS* pictureParams)
+{
+	return reinterpret_cast<D3D11NvDecoder_Impl*>(userData)->OnPictureDecode(pictureParams);
+}
+
+int32_t CUDAAPI D3D11NvDecoder_Impl::PictureDisplayCallback(void* userData, CUVIDPARSERDISPINFO* displayInfo)
+{
+	return reinterpret_cast<D3D11NvDecoder_Impl*>(userData)->OnPictureDisplay(displayInfo);
+}
+
+int32_t D3D11NvDecoder_Impl::OnVideoSequence(CUVIDEOFORMAT* videoFormat)
+{
+	// NVDEC Decoder 생성, 재설정
+	// 스트림의 시작 또는 해상도, 포맷 변경 시 OnVideoSequence 가 호출된다.
+
+	if (!videoFormat)
+	{
+		return 0;
+	}
+
+	const int32_t decodeSurfaceCount = videoFormat->min_num_decode_surfaces;
+
+	CUVIDDECODECAPS decodeCaps = {};
+	decodeCaps.eCodecType = videoFormat->codec;
+	decodeCaps.eChromaFormat = videoFormat->chroma_format;
+	decodeCaps.nBitDepthMinus8 = videoFormat->bit_depth_luma_minus8;
+
+	ScopedCudaContext cudaContext(m_cudaContext);
+	if (!cudaContext.IsActive())
+	{
+		return 0;
+	}
+
+	// GPU 가 이 코덱과 해상도가 지원하는지 확인
+	if (!NVDEC_API_CALL(cuvidGetDecoderCaps(&decodeCaps)))
+	{
+		return 0;
+	}
+
+	if (!decodeCaps.bIsSupported)
+	{
+		return 0;
+	}
+
+	if ((videoFormat->coded_width > decodeCaps.nMaxWidth) ||
+		(videoFormat->coded_height > decodeCaps.nMaxHeight))
+	{
+		return 0;
+	}
+
+	if ((videoFormat->coded_width >> 4) * (videoFormat->coded_height >> 4) > decodeCaps.nMaxMBCount)
+	{
+		return 0;
+	}
+
+	if (m_videoFormatDesc.isInitialized && m_decoderHandle)
+	{
+		// 이전에 Decoder 가 생성 된 경우라면 이곳을 타게 될 것이다.
+		if (m_videoFormatDesc.lumaWidth && m_videoFormatDesc.lumaHeight && m_videoFormatDesc.chromaHeight)
+		{
+			// 필요에 따라 해상도가 변경되거나 Display Area 변경된 경우 Decoder 파라메터를 Reconfigure 한다.
+			//
+			// ReconfigureForVideoFormat 는 파서에 돌려줄 값을 그대로 반환한다.
+			// 예전에는 반환 타입이 bool 이라 decode surface 수가 1 로 뭉개졌고,
+			// 그 아래 return decodeSurfaceCount 는 도달할 수 없는 코드였다.
+			const int32_t reconfigureResult = ReconfigureForVideoFormat(videoFormat);
+			if (reconfigureResult == static_cast<int32_t>(SequenceResult::Failed))
+			{
+				EnterFaultedState(NvDecErrorCode::ReconfigureFailed);
+			}
+
+			return reconfigureResult;
+		}
+	}
+
+	// 여기 아래서부터는 초기 1회에 대해서 Decoder 를 생성하는 부분이다.
+
+	// NVDEC 출력 포맷 설정
+	VideoFormatDesc videoFormatDesc = {};
+	videoFormatDesc.isInitialized = true;
+	videoFormatDesc.codec = videoFormat->codec;
+	videoFormatDesc.chromaFormat = videoFormat->chroma_format;
+	videoFormatDesc.bitDepthMinus8 = videoFormat->bit_depth_luma_minus8;
+	videoFormatDesc.bitsPerPixel = videoFormat->bit_depth_luma_minus8 > 0 ? 2 : 1;
+
+	if (videoFormat->chroma_format == cudaVideoChromaFormat_420 || videoFormat->chroma_format == cudaVideoChromaFormat_Monochrome)
+		videoFormatDesc.outputFormat = videoFormat->bit_depth_luma_minus8 ? cudaVideoSurfaceFormat_P016 : cudaVideoSurfaceFormat_NV12;
+	else if (videoFormat->chroma_format == cudaVideoChromaFormat_444)
+		videoFormatDesc.outputFormat = videoFormat->bit_depth_luma_minus8 ? cudaVideoSurfaceFormat_YUV444_16Bit : cudaVideoSurfaceFormat_YUV444;
+	else if (videoFormat->chroma_format == cudaVideoChromaFormat_422)
+		videoFormatDesc.outputFormat = videoFormat->bit_depth_luma_minus8 ? cudaVideoSurfaceFormat_P216 : cudaVideoSurfaceFormat_NV16;
+
+	videoFormatDesc.codedWidth = videoFormat->coded_width;
+	videoFormatDesc.codedHeight = videoFormat->coded_height;
+	videoFormatDesc.maxCodedWidth = videoFormat->coded_width;
+	videoFormatDesc.maxCodedHeight = videoFormat->coded_height;
+	videoFormatDesc.lumaWidth = videoFormat->display_area.right - videoFormat->display_area.left;
+	videoFormatDesc.lumaHeight = videoFormat->display_area.bottom - videoFormat->display_area.top;
+	videoFormatDesc.chromaHeight = static_cast<uint32_t>(ceil(videoFormatDesc.lumaHeight * GetChromaHeightFactor(videoFormatDesc.outputFormat)));
+	videoFormatDesc.chromaPlanes = GetChromaPlaneCount(videoFormatDesc.outputFormat);
+	videoFormatDesc.interlaceMode = videoFormat->progressive_sequence ? cudaVideoDeinterlaceMode_Weave : cudaVideoDeinterlaceMode_Adaptive;
+	videoFormatDesc.decodeSurfaceCount = static_cast<uint32_t>(decodeSurfaceCount);
+
+	m_videoFormatDesc = videoFormatDesc;
+	m_currentVideoFormat = *videoFormat;
+
+	// Decoder 생성을 위한 파라메터 설정
+	CUVIDDECODECREATEINFO decodeCreateInfo = {};
+	decodeCreateInfo.CodecType = videoFormatDesc.codec;
+	decodeCreateInfo.ulWidth = videoFormatDesc.codedWidth;
+	decodeCreateInfo.ulHeight = videoFormatDesc.codedHeight;
+	decodeCreateInfo.ulMaxWidth = videoFormatDesc.maxCodedWidth;
+	decodeCreateInfo.ulMaxHeight = videoFormatDesc.maxCodedHeight;
+	decodeCreateInfo.ulNumDecodeSurfaces = videoFormatDesc.decodeSurfaceCount;
+	decodeCreateInfo.ChromaFormat = videoFormatDesc.chromaFormat;
+	decodeCreateInfo.bitDepthMinus8 = videoFormatDesc.bitDepthMinus8;
+	decodeCreateInfo.OutputFormat = videoFormatDesc.outputFormat;
+	decodeCreateInfo.DeinterlaceMode = videoFormatDesc.interlaceMode;
+	decodeCreateInfo.ulNumOutputSurfaces = 2;
+	decodeCreateInfo.ulTargetWidth = videoFormatDesc.codedWidth;
+	decodeCreateInfo.ulTargetHeight = videoFormatDesc.lumaHeight;
+	decodeCreateInfo.vidLock = m_videoContextLock;
+	decodeCreateInfo.ulCreationFlags = cudaVideoCreate_PreferCUVID;
+
+	// NVDEC Decoder 생성
+	if (!NVDEC_API_CALL(cuvidCreateDecoder(&m_decoderHandle, &decodeCreateInfo)))
+	{
+		m_videoFormatDesc = {};
+		::ZeroMemory(&m_currentVideoFormat, sizeof(m_currentVideoFormat));
+		return 0;
+	}
+
+	// Decode 결과를 저장할 출력 버퍼 생성
+	if (!CreateOutputSlots() || !CreateBGRAStagingBuffers())
+	{
+		DestroyOutputSlots();
+		DestroyBGRAStagingBuffers();
+		NVDEC_API_CALL(cuvidDestroyDecoder(m_decoderHandle));
+		m_decoderHandle = nullptr;
+		m_videoFormatDesc = {};
+		::ZeroMemory(&m_currentVideoFormat, sizeof(m_currentVideoFormat));
+		return 0;
+	}
+
+	m_inputSequence = 0;
+	m_outputSequence = 0;
+
+	return decodeSurfaceCount;
+}
+
+int32_t D3D11NvDecoder_Impl::OnPictureDecode(CUVIDPICPARAMS* pictureParams)
+{
+	// 프레임 하나 Decode Request
+	// 실제 Decode 수행을 요청
+
+	if (!m_decoderHandle || !pictureParams)
+	{
+		return 0;
+	}
+
+	ScopedCudaContext cudaContext(m_cudaContext);
+	if (!cudaContext.IsActive())
+	{
+		return -1;
+	}
+
+	return NVDEC_API_CALL(cuvidDecodePicture(m_decoderHandle, pictureParams)) ? 1 : -1;
+}
+
+int32_t D3D11NvDecoder_Impl::OnPictureDisplay(CUVIDPARSERDISPINFO* displayInfo)
+{
+	// Decode 결과를 가져와서 NV12 -> BGRA 변환 후 사전에 등록된 BGRA D3D11Texture2D 에 저장한다.
+	// 이때 NV12 -> BGRA 변환 작업은 VideoProcessor 가 아닌 Cuda Kernel 을 통해 작동한다.
+	if (!m_decoderHandle || !displayInfo)
+	{
+		return 0;
+	}
+
+	// Reconfigure 가 수행 중이라면 버퍼 초기화가 수행되므로 함수를 그냥 빠져나가도록 한다.
+	if (::ReadAcquire(&m_reconfiguring) == TRUE)
+	{
+		return 0;
+	}
+
+	ScopedCudaContext cudaContext(m_cudaContext);
+	if (!cudaContext.IsActive())
+	{
+		return -1;
+	}
+
+	CUVIDPROCPARAMS vidProcParameters = {};
+	vidProcParameters.progressive_frame = displayInfo->progressive_frame;
+	vidProcParameters.top_field_first = displayInfo->top_field_first;
+	vidProcParameters.second_field = displayInfo->repeat_first_field;
+	vidProcParameters.output_stream = m_cudaStream;
+
+	CUdeviceptr srcFrame = 0;   // Decode 결과 NVDEC 내부 프레임 포인터가 저장 되어 있다
+	unsigned int srcPitch = 0;
+	int32_t result = 1;
+	bool mappedVideoFrame = false;
+	bool mappedGraphicsResource = false;
+	bool keyedMutexHeld = false;
+	bool frameReady = false;
+	uint32_t slot = 0;
+	LONG currentWrite = 0;
+	LONG currentRead = 0;
+	CUarray cuArrayTexture = nullptr;
+	CUDA_MEMCPY2D copy = {};
+
+	// goto 로 건너뛰는 구간에 생성자가 있는 지역 객체를 둘 수 없다.
+	// 이 함수가 이미 쓰는 mapped* 플래그와 같은 방식으로 게이트도 직접 여닫는다.
+	bool gateEntered = false;
+
+	if (!NVDEC_API_CALL(cuvidCtxLock(m_videoContextLock, 0)))
+	{
+		return -1;
+	}
+
+	// Decoding 된 프레임 가져오기
+	if (!NVDEC_API_CALL(cuvidMapVideoFrame(m_decoderHandle, displayInfo->picture_index, &srcFrame, &srcPitch, &vidProcParameters)))
+	{
+		NVDEC_API_CALL(cuvidCtxUnlock(m_videoContextLock, 0));
+		return -1;
+	}
+	mappedVideoFrame = true;
+
+	// Atomic 하게 Current Write, Read Pos 를 읽어온다.
+	currentWrite = ::ReadAcquire(&m_inputSequence);
+	currentRead = ::ReadAcquire(&m_outputSequence);
+	if ((currentWrite - currentRead) >= static_cast<LONG>(m_outputSlotCount))
+	{
+		// 앱이 가져가지 않아 링이 한 바퀴 찼다. 오래된 것을 버리고 진행한다.
+		const LONG skipTo = currentWrite - static_cast<LONG>(m_outputSlotCount) + 1;
+		::InterlockedExchangeAdd64(&m_droppedNotConsumedCount, skipTo - currentRead);
+		::InterlockedExchange(&m_outputSequence, skipTo);
+	}
+
+	slot = static_cast<uint32_t>(currentWrite) & (m_outputSlotCount - 1U);
+
+	// 앱이 아직 이 슬롯을 들고 있으면 덮어쓸 수 없다.
+	// 여기서 덮어쓰면 앱이 렌더링 중인 텍스처가 찢어진다.
+	// 이번 프레임을 버리고 앱에 알린다.
+	if (IsSlotReferenced(slot))
+	{
+		::InterlockedIncrement64(&m_droppedPoolExhaustedCount);
+		NVDEC_API_CALL(cuvidUnmapVideoFrame(m_decoderHandle, srcFrame));
+		NVDEC_API_CALL(cuvidCtxUnlock(m_videoContextLock, 0));
+		RecordLostFrame(NvDecErrorCode::OutputPoolExhausted);
+		return 1;
+	}
+
+	if (m_outputKeyedMutexes[slot])
+	{
+		const HRESULT acquired = m_outputKeyedMutexes[slot]->AcquireSync(0, 8);
+		if (acquired != S_OK)
+		{
+			if (acquired == WAIT_TIMEOUT)
+			{
+				::InterlockedIncrement64(&m_droppedPoolExhaustedCount);
+				RecordLostFrame(NvDecErrorCode::OutputPoolExhausted);
+			}
+			else result = -1;
+			goto cleanup;
+		}
+		keyedMutexHeld = true;
+	}
+
+	// 여기부터 cleanup 까지 D3D11 리소스를 CUDA 에 매핑한 상태다.
+	// 커널 실행과 memcpy 는 스트림에 실리는 비동기 명령이라 게이트를 오래 잡지 않는다.
+	gateEntered = (m_contextGate != nullptr) && m_contextGate->Enter();
+
+	// 사전에 등록된 D3D11Texture2D 에 Map
+	if (!CUDA_DRVAPI_CALL(cuGraphicsMapResources(1, &m_cudaOutputResources[slot], m_cudaStream)))
+	{
+		result = -1;
+		goto cleanup;
+	}
+	mappedGraphicsResource = true;
+
+	// Decode 결과는 NV12(YUV 4:2:0) 이므로 Cuda Kernel 로 BGRA 로 변환한다.
+	{
+		uint8_t* yPlane = reinterpret_cast<uint8_t*>(srcFrame);
+		uint8_t* uvPlane = yPlane + srcPitch * m_videoFormatDesc.lumaHeight;
+
+
+		ConvertNV12ToBGRA(
+			yPlane,
+			uvPlane,
+			m_videoFormatDesc.lumaWidth,
+			m_videoFormatDesc.lumaHeight,
+			srcPitch,
+			reinterpret_cast<uchar4*>(m_bgraStagingBuffers[slot]),
+			static_cast<int32_t>(m_bgraStagingPitch),
+			m_cudaStream);
+	}
+
+	// NV12 -> BGRA8 변환이 끝난 후 D3D11 Texture 로 데이터 복사
+	if (!CUDA_DRVAPI_CALL(cuGraphicsSubResourceGetMappedArray(&cuArrayTexture, m_cudaOutputResources[slot], 0, 0)))
+	{
+		result = -1;
+		goto cleanup;
+	}
+
+	// Device to Device 로의 복사가 수행되어 매우 빠르다.
+	copy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+	copy.srcDevice = m_bgraStagingBuffers[slot];
+	copy.srcPitch = m_bgraStagingPitch;
+	copy.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+	copy.dstArray = cuArrayTexture;
+	copy.WidthInBytes = m_videoFormatDesc.lumaWidth * 4;
+	copy.Height = m_videoFormatDesc.lumaHeight;
+
+	if (!CUDA_DRVAPI_CALL(cuMemcpy2DAsync(&copy, m_cudaStream)))
+	{
+		result = -1;
+		goto cleanup;
+	}
+
+	frameReady = true;
+
+cleanup:
+	if (mappedGraphicsResource && !CUDA_DRVAPI_CALL(cuGraphicsUnmapResources(1, &m_cudaOutputResources[slot], m_cudaStream)))
+		result = -1;
+
+	// The event covers Unmap as well as the CUDA copy. A keyed producer must
+	// finish GPU access before handing ownership to the other D3D11 device.
+	if (frameReady && result > 0 && !CUDA_DRVAPI_CALL(cuEventRecord(m_decodeCompleteEvents[slot], m_cudaStream)))
+		result = -1;
+	if (keyedMutexHeld)
+	{
+		if (!CUDA_DRVAPI_CALL(cuStreamSynchronize(m_cudaStream))) result = -1;
+		if (m_outputKeyedMutexes[slot]->ReleaseSync(0) != S_OK) result = -1;
+	}
+
+	if (mappedVideoFrame)
+	{
+		NVDEC_API_CALL(cuvidUnmapVideoFrame(m_decoderHandle, srcFrame));
+	}
+
+	NVDEC_API_CALL(cuvidCtxUnlock(m_videoContextLock, 0));
+
+	if (gateEntered)
+	{
+		m_contextGate->Leave();
+	}
+
+	if (frameReady && result > 0)
+	{
+		m_outputFrames[slot].timestamp = displayInfo->timestamp;
+		::InterlockedIncrement(&m_inputSequence);
+		::InterlockedIncrement64(&m_decodedFrameCount);
+		ResetLostFrameStreak();
+	}
+	return result;
+}
+
+// =============================================================================
+// 프레임 수신
+// =============================================================================
+
+D3D11NvDecoder_Impl::Frame* D3D11NvDecoder_Impl::AcquireFrame()
+{
+	// 준비된 프레임을 하나 꺼낸다.
+	// 돌려준 슬롯은 ReleaseFrame 이 불릴 때까지 디코더가 덮어쓰지 않는다.
+	if (m_outputSlotCount == 0)
+	{
+		return nullptr;
+	}
+
+	LONG currentWrite = ::ReadAcquire(&m_inputSequence);
+	LONG currentRead = ::ReadAcquire(&m_outputSequence);
+
+	if (currentRead >= currentWrite)
+	{
+		return nullptr;
+	}
+
+	// 앱이 못 따라가 밀렸으면 최신 쪽으로 건너뛴다.
+	// 라이브 영상에서는 오래된 프레임을 전달하는 것보다 버리는 편이 낫다.
+	const LONG lag = currentWrite - currentRead;
+	const LONG maxLag = static_cast<LONG>(m_userConfig.maxOutputLagFrames);
+	if (maxLag > 0 && lag > maxLag)
+	{
+		const LONG skipTarget = currentWrite - 1;
+		const LONG skipped = skipTarget - currentRead;
+		if (skipped > 0)
+		{
+			::InterlockedExchange(&m_outputSequence, skipTarget);
+			::InterlockedExchangeAdd64(&m_droppedNotConsumedCount, skipped);
+			currentRead = skipTarget;
+			InvokeErrorCallback(NvDecErrorCode::OutputNotConsumed);
+		}
+	}
+
+	const uint32_t slot = static_cast<uint32_t>(currentRead) & (m_outputSlotCount - 1U);
+
+	// 이 슬롯을 앱이 이미 들고 있으면 안 된다. 링 장부가 어긋났다는 뜻이다.
+	if (IsSlotReferenced(slot))
+	{
+		printf_s("[NVDEC ERROR] Output slot %u is still held by the app while being"
+			" handed out again. Ring bookkeeping is inconsistent.\n", slot);
+		return nullptr;
+	}
+
+	// Decode 완료 이벤트를 기다린 후에 넘긴다.
+	if (m_decodeCompleteEvents[slot])
+	{
+		ScopedCudaContext cudaContext(m_cudaContext);
+		if (!cudaContext.IsActive())
+		{
+			return nullptr;
+		}
+
+		if (!CUDA_DRVAPI_CALL(cuEventSynchronize(m_decodeCompleteEvents[slot])))
+		{
+			return nullptr;
+		}
+	}
+
+	::InterlockedExchange(&m_slotReferenceCounts[slot], 1);
+	::InterlockedIncrement(&m_referencedSlotCount);
+	::InterlockedIncrement(&m_outputSequence);
+	::InterlockedIncrement64(&m_deliveredFrameCount);
+
+	m_outputFrames[slot].slot = slot;
+	return &m_outputFrames[slot];
+}
+
+void D3D11NvDecoder_Impl::ReleaseFrame(Frame* frame)
+{
+	if (!frame)
+	{
+		return;
+	}
+
+	const uint32_t slot = frame->slot;
+	if (slot >= m_outputSlotCount || frame != &m_outputFrames[slot])
+	{
+		printf_s("[NVDEC ERROR] ReleaseFrame got a frame this decoder did not hand out.\n");
+		return;
+	}
+
+	::AcquireSRWLockExclusive(&m_leaseLock);
+	const LONG refs = ::ReadAcquire(&m_slotReferenceCounts[slot]);
+	if (refs > 0)
+	{
+		::InterlockedDecrement(&m_slotReferenceCounts[slot]);
+		if (refs == 1) ::InterlockedDecrement(&m_referencedSlotCount);
+		::WakeAllConditionVariable(&m_leaseChanged);
+	}
+	else printf_s("[NVDEC WARNING] ReleaseFrame called twice for slot %u.\n", slot);
+	::ReleaseSRWLockExclusive(&m_leaseLock);
+}
+
+// =============================================================================
+// 오류 / 콜백 통지
+// =============================================================================
+
+void D3D11NvDecoder_Impl::EnterFaultedState(NvDecErrorCode errorCode)
+{
+	const bool alreadyFaulted = (::InterlockedExchange(&m_faulted, TRUE) == TRUE);
+	if (alreadyFaulted)
+	{
+		return;
+	}
+
+	printf_s("[NVDEC ERROR] Decoder entered faulted state. errorCode=%u\n",
+		static_cast<uint32_t>(errorCode));
+	InvokeErrorCallback(errorCode);
+}
+
+void D3D11NvDecoder_Impl::InvokeErrorCallback(NvDecErrorCode errorCode)
+{
+	::AcquireSRWLockShared(&m_callbackLock);
+	if (m_errorCallback)
+	{
+		m_errorCallback(errorCode, m_errorCallbackUserData);
+	}
+	::ReleaseSRWLockShared(&m_callbackLock);
+}
+
+void D3D11NvDecoder_Impl::RecordLostFrame(NvDecErrorCode errorCode)
+{
+	// 프레임 하나를 잃었다. 연속으로 쌓이면 세션이 살아있다고 볼 수 없다.
+	InvokeErrorCallback(errorCode);
+
+	const LONG consecutive = ::InterlockedIncrement(&m_consecutiveLostFrames);
+	if (static_cast<uint32_t>(consecutive) >= m_userConfig.maxConsecutiveLostFrames)
+	{
+		printf_s("[NVDEC ERROR] %ld consecutive frames lost. Giving up the session.\n",
+			consecutive);
+		EnterFaultedState(NvDecErrorCode::DecoderFaulted);
+	}
+}
+
+void D3D11NvDecoder_Impl::ResetLostFrameStreak()
+{
+	::InterlockedExchange(&m_consecutiveLostFrames, 0);
+}
+
+// =============================================================================
+// 통계 / 진단
+// =============================================================================
+
+void D3D11NvDecoder_Impl::GetStats(NvDecStats& stats) const
+{
+	stats.parsedPackets = static_cast<uint64_t>(
+		::ReadAcquire64(&m_parsedPacketCount));
+	stats.decodedFrames = static_cast<uint64_t>(
+		::ReadAcquire64(&m_decodedFrameCount));
+	stats.deliveredFrames = static_cast<uint64_t>(
+		::ReadAcquire64(&m_deliveredFrameCount));
+	stats.droppedPoolExhausted = static_cast<uint64_t>(
+		::ReadAcquire64(&m_droppedPoolExhaustedCount));
+	stats.droppedNotConsumed = static_cast<uint64_t>(
+		::ReadAcquire64(&m_droppedNotConsumedCount));
+	stats.droppedDisplayFailed = static_cast<uint64_t>(
+		::ReadAcquire64(&m_droppedDisplayFailedCount));
+	stats.framesHeldByApp = static_cast<uint32_t>(
+		::ReadAcquire(&m_referencedSlotCount));
+	stats.faulted = IsFaulted();
+
+	// 큐 펌프를 쓰지 않으면 이 값들은 0 으로 남는다.
+	if (m_inputQueue)
+	{
+		stats.droppedInputQueue = m_inputQueue->GetDropCount();
+		stats.dequeuedPackets = m_inputQueue->GetDequeuedCount();
+	}
+
+	if (m_decodeThread)
+	{
+		m_decodeThread->FillStats(stats);
+	}
+}
+
+// =============================================================================
+// getter / setter
+// =============================================================================
+
+bool D3D11NvDecoder_Impl::IsFaulted() const
+{
+	return ::ReadAcquire(&m_faulted) == TRUE;
+}
+
+uint32_t D3D11NvDecoder_Impl::GetInputSlotIndex() const
+{
+	const LONG sequence = ::ReadAcquire(&m_inputSequence);
+	return static_cast<uint32_t>(sequence) & (m_outputSlotCount - 1U);
+}
+
+uint32_t D3D11NvDecoder_Impl::GetOutputSlotIndex() const
+{
+	const LONG sequence = ::ReadAcquire(&m_outputSequence);
+	return static_cast<uint32_t>(sequence) & (m_outputSlotCount - 1U);
+}
+
+bool D3D11NvDecoder_Impl::IsSlotReferenced(uint32_t slot) const
+{
+	if (slot >= kMaxOutputSlotCount)
+	{
+		return false;
+	}
+
+	return ::ReadAcquire(&m_slotReferenceCounts[slot]) > 0;
+}
+
+// 렌더러가 공유 출력 텍스처를 한 번씩 열어 등록할 수 있도록 풀 정보를 반환한다.
+// 픽셀 복사나 핸들 소유권 이전은 하지 않는다. legacy 핸들이므로 소비자가 CloseHandle하면 안 된다.
+// 프레임 콜백 안이나 파싱이 정지된 상태에서 호출해야 풀 재생성과 겹치지 않는다.
+bool D3D11NvDecoder_Impl::GetSharedOutputPool(D3D11NvDecoder::SharedOutputPool& pool) const
+{
+	// 이전 호출의 슬롯 수, 세대 번호, 핸들이 결과에 남지 않도록 초기화한다.
+	pool = {};
+
+	// 현재 풀 등록 경로는 keyed mutex를 사용하는 공유 출력 모드에서만 제공한다.
+	// 출력 슬롯은 스트림 포맷을 확인한 뒤 생성되므로 초기화 직후에는 없을 수 있다.
+	if (!m_userConfig.sharedOutputTextureMode || !m_userConfig.sharedOutputKeyedMutex || !m_outputSlotCount)
+		return false;
+
+	for (uint32_t i = 0; i < m_outputSlotCount; ++i)
+	{
+		// 모든 슬롯의 핸들이 준비돼 있어야 풀 전체를 소비자에게 등록할 수 있다.
+		// 실패 시 false를 반환하므로 호출자는 부분적으로 채워진 결과를 사용하면 안 된다.
+		if (!m_outputFrames[i].sharedHandle)
+			return false;
+
+		// 핸들 값만 빌려준다. 소비자는 자신의 디바이스에서 열어 텍스처 참조를 확보한다.
+		pool.handles[i] = m_outputFrames[i].sharedHandle;
+	}
+
+	// 유효한 핸들 개수와 풀 세대를 전달한다. 세대가 바뀌면 소비자는 풀을 다시 등록해야 한다.
+	pool.count = m_outputSlotCount;
+	pool.generation = m_outputPoolGeneration;
+
+	return true;
+}
+
+// 이미 AcquireFrame한 출력 슬롯의 참조를 하나 추가해 콜백 밖에서도 프레임을 유지한다.
+// 픽셀 복사나 COM AddRef가 아니라 슬롯 재사용을 막는 참조다.
+// 성공한 호출마다 원래 Frame 포인터로 ReleaseFrame을 한 번 호출해야 한다.
+bool D3D11NvDecoder_Impl::RetainFrame(const Frame& frame)
+{
+	const uint32_t slot = frame.slot;
+
+	// ReleaseFrame과 검사/증가를 직렬화해 마지막 반납과 참조 추가가 엇갈리지 않게 한다.
+	::AcquireSRWLockExclusive(&m_leaseLock);
+
+	// 슬롯 범위를 먼저 확인해 아래 배열 접근이 유효한지 보장한다.
+	const bool valid = slot < m_outputSlotCount &&
+		// 이 디코더가 보관한 원본 Frame만 허용한다. 구조체를 복사한 사본은 허용하지 않는다.
+		&frame == &m_outputFrames[slot] &&
+		// 현재 출력 풀에 속하는 프레임인지 확인한다.
+		frame.poolGeneration == m_outputPoolGeneration &&
+		// 이미 획득한 프레임만 유지할 수 있다. 반납이 끝난 슬롯을 다시 획득하는 함수가 아니다.
+		::ReadAcquire(&m_slotReferenceCounts[slot]) > 0;
+
+	// 기존 참조가 있으므로 참조 중인 슬롯의 총개수는 바꾸지 않고, 이 슬롯의 참조 수만 늘린다.
+	if (valid)
+		::InterlockedIncrement(&m_slotReferenceCounts[slot]);
+
+	::ReleaseSRWLockExclusive(&m_leaseLock);
+
+	// true일 때만 추가 참조를 확보했으며, 호출자에게 반납 책임이 생긴다.
+	return valid;
+}

@@ -1,0 +1,13 @@
+.vs/
+Debug/
+Release/
+x64/
+x86/
+bin/
+obj/
+/Shaders/*.cso
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.bak
